@@ -1,0 +1,57 @@
+Migración: datos reales en SYSTABON (DBF)
+=========================================
+
+Fuente de verdad
+----------------
+Los datos operativos del instituto están en los archivos *.dbf del directorio
+del sistema Fox, en esta máquina/copia por ejemplo:
+
+  c:\SYSTABON\
+
+No usar datos de ejemplo: la migración debe leer esos DBF (directamente o vía
+export). El proyecto web nuevo vive en instituto-web\; los DBF siguen siendo
+la referencia hasta completar la importación a MariaDB.
+
+Tablas DBF más relevantes para el sistema nuevo (prioridad alta)
+------------------------------------------------------------------
+  CLIENTES.dbf   Personas que pagan (= alumnos en la práctica; RAZON, OBSERV/curso, etc.)
+  PAGOS.dbf      Movimientos / cuotas por período, saldos
+  HI_PAGO.dbf    Historial de pagos
+  ABONCLIE.dbf   Qué artículo/abono corresponde a cada cliente
+  ARTICULO.dbf   Conceptos / importes
+  PORCEN.dbf     Parámetros (día tope, recargos, bonificaciones)
+  BARRIOS.dbf    Barrios
+  ALU.dbf        Si aún se usa como maestro de alumnos antes de volcar a CLIENTES
+  NUMERO.dbf     Numeradores (cuidado al migrar: puede requerir lógica aparte)
+
+Tablas útiles según módulo (medio/bajo al inicio)
+-------------------------------------------------
+  ZONA.dbf, TIVA.dbf, SUCURSAL.dbf, etc.
+
+No son datos de negocio (no migrar como tal)
+---------------------------------------------
+  FOXUSER.dbf    Preferencias del entorno Visual FoxPro
+
+Destino en MariaDB (docker)
+---------------------------
+  - Tablas definitivas: ver sql\init\01_schema.sql (alumnos, cuota_mensual, …)
+  - Tablas staging (import intermedio): sql\init\03_staging_fox.sql
+
+Pasos prácticos
+---------------
+1) En Fox o con una herramienta DBF, obtener STRUCTURE / lista de campos de
+   CLIENTES, PAGOS, HI_PAGO, ABONCLIE (y las que vayan a migrar).
+
+2) Ajustar las columnas de staging_fox_* en 03_staging_fox.sql para que
+   coincidan con el export, O exportar CSV con nombres que ya coincidan.
+
+3) Exportar DBF → CSV (UTF-8 si es posible) desde Fox, DBF Viewer, o script.
+
+4) Importar CSV en las tablas staging_* vía phpMyAdmin (Importar) o LOAD DATA.
+
+5) Desarrollar el script que pasa staging → tablas definitivas (validar,
+   procesado=1, errores en error_msg).
+
+Nota: si en el futuro se lee DBF desde PHP, hará falta una extensión o librería
+adecuada; mientras tanto CSV desde los DBF reales de c:\SYSTABON es el camino
+más simple.

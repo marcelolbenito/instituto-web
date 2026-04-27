@@ -1,0 +1,62 @@
+# Instituto — entorno local (PHP + MariaDB + phpMyAdmin)
+# Uso: copiar .env.example a .env, luego: docker compose up -d
+# Web: http://localhost:8080  |  phpMyAdmin: http://localhost:8081
+
+services:
+  db:
+    image: mariadb:11
+    container_name: instituto-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - instituto_db_data:/var/lib/mysql
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: ./docker/php
+    container_name: instituto-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    volumes:
+      - ./public:/var/www/html
+      - ./src:/var/www/src
+      - ./config:/var/www/config
+    environment:
+      DB_HOST: db
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      SALDO_CORTE_DESDE: ${SALDO_CORTE_DESDE}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: instituto-phpmyadmin
+    restart: unless-stopped
+    ports:
+      - "${PMA_PORT:-8081}:80"
+    environment:
+      PMA_HOST: db
+      PMA_USER: root
+      PMA_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      UPLOAD_LIMIT: 64M
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  instituto_db_data:
