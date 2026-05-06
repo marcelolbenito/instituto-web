@@ -13,6 +13,7 @@ $buscar = trim((string) ($_GET['q'] ?? ''));
 $fechaCorte = saldo_corte_desde();
 $usaComponentesPago = db_has_column($pdo, 'pago_registrado', 'importe_capital')
     && db_has_column($pdo, 'pago_registrado', 'importe_interes')
+    && db_has_column($pdo, 'pago_registrado', 'importe_beca_perdida')
     && db_has_column($pdo, 'pago_registrado', 'importe_descuento');
 $periodoCorte = null;
 if ($fechaCorte !== null) {
@@ -120,11 +121,11 @@ if ($alumnoId > 0) {
         }
 
         $sqlPagos = $usaComponentesPago
-            ? 'SELECT fecha_pago, importe, importe_capital, importe_interes, importe_descuento, medio, referencia, nota
+            ? 'SELECT fecha_pago, importe, importe_capital, importe_interes, importe_beca_perdida, importe_descuento, medio, referencia, nota
                FROM pago_registrado
                WHERE alumno_id = ?
                  AND fecha_pago IS NOT NULL'
-            : 'SELECT fecha_pago, importe, 0 AS importe_capital, 0 AS importe_interes, 0 AS importe_descuento, medio, referencia, nota
+            : 'SELECT fecha_pago, importe, 0 AS importe_capital, 0 AS importe_interes, 0 AS importe_beca_perdida, 0 AS importe_descuento, medio, referencia, nota
                FROM pago_registrado
                WHERE alumno_id = ?
                  AND fecha_pago IS NOT NULL';
@@ -136,11 +137,12 @@ if ($alumnoId > 0) {
         foreach ($pagosRaw as $p) {
             $capitalPago = (float) ($p['importe_capital'] ?? 0);
             $interesPago = (float) ($p['importe_interes'] ?? 0);
+            $becaPago = (float) ($p['importe_beca_perdida'] ?? 0);
             $descuentoPago = (float) ($p['importe_descuento'] ?? 0);
-            if (abs($capitalPago) < 0.00001 && abs($interesPago) < 0.00001 && abs($descuentoPago) < 0.00001) {
+            if (abs($capitalPago) < 0.00001 && abs($interesPago) < 0.00001 && abs($becaPago) < 0.00001 && abs($descuentoPago) < 0.00001) {
                 $capitalPago = (float) $p['importe']; // compatibilidad con esquema viejo
             }
-            $haberPago = $capitalPago + $interesPago - $descuentoPago;
+            $haberPago = $capitalPago + $interesPago + $becaPago - $descuentoPago;
             $fechaMov = (string) $p['fecha_pago'];
             $ref = trim((string) ($p['referencia'] ?? ''));
             $periodo = extract_period_from_reference($ref);
@@ -173,11 +175,12 @@ if ($alumnoId > 0) {
         foreach ($pagosRaw as $p) {
             $capitalPago = (float) ($p['importe_capital'] ?? 0);
             $interesPago = (float) ($p['importe_interes'] ?? 0);
+            $becaPago = (float) ($p['importe_beca_perdida'] ?? 0);
             $descuentoPago = (float) ($p['importe_descuento'] ?? 0);
-            if (abs($capitalPago) < 0.00001 && abs($interesPago) < 0.00001 && abs($descuentoPago) < 0.00001) {
+            if (abs($capitalPago) < 0.00001 && abs($interesPago) < 0.00001 && abs($becaPago) < 0.00001 && abs($descuentoPago) < 0.00001) {
                 $capitalPago = (float) $p['importe']; // compatibilidad con esquema viejo
             }
-            $haberPago = $capitalPago + $interesPago - $descuentoPago;
+            $haberPago = $capitalPago + $interesPago + $becaPago - $descuentoPago;
             if (abs($haberPago) < 0.00001) {
                 continue;
             }
@@ -202,9 +205,10 @@ if ($alumnoId > 0) {
             if (!empty($marcasFoxPorMovimiento[$movKey])) {
                 $conceptoPago = 'Pago (incluye marca Fox: P)';
             }
-            if (abs($interesPago) > 0.00001 || abs($descuentoPago) > 0.00001) {
+            if (abs($interesPago) > 0.00001 || abs($becaPago) > 0.00001 || abs($descuentoPago) > 0.00001) {
                 $conceptoPago .= ' [cap $ ' . number_format($capitalPago, 2, ',', '.')
                     . ' + int $ ' . number_format($interesPago, 2, ',', '.')
+                    . ' + beca $ ' . number_format($becaPago, 2, ',', '.')
                     . ' - desc $ ' . number_format($descuentoPago, 2, ',', '.') . ']';
             }
             $movimientos[] = [

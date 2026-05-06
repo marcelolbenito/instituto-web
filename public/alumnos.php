@@ -90,6 +90,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $haceFactura = isset($_POST['hace_factura']) ? 1 : 0;
         $curso = trim((string) ($_POST['curso'] ?? '')) ?: null;
         $barrioId = isset($_POST['barrio_id']) && $_POST['barrio_id'] !== '' ? (int) $_POST['barrio_id'] : null;
+        $provincia = trim((string) ($_POST['provincia'] ?? '')) ?: null;
+        $ciudad = trim((string) ($_POST['ciudad'] ?? '')) ?: null;
         $activo = $estadoCuenta === 'activo' ? 1 : 0;
 
         if ($nombre === '') {
@@ -101,23 +103,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($id > 0) {
                 $sql = 'UPDATE alumnos SET codigo_legacy = ?, nombre_completo = ?, direccion = ?, documento = ?,
                   condicion_iva = ?, cuit = ?, fecha_ingreso = ?, fecha_inactivacion = ?, estado_cuenta = ?,
-                  observaciones = ?, orden_referencia = ?, hace_factura = ?, curso = ?, barrio_id = ?, activo = ?
+                  observaciones = ?, orden_referencia = ?, hace_factura = ?, curso = ?, barrio_id = ?, provincia = ?, ciudad = ?, activo = ?
                   WHERE id = ?';
                 $st = $pdo->prepare($sql);
                 $st->execute([
                     $codigoLegacy, $nombre, $direccion ?: null, $documento,
                     $condicion, $cuit, $fechaIngSql, $fechaInaSql, $estadoCuenta,
-                    $observaciones, $ordenRef, $haceFactura, $curso, $barrioId, $activo, $id,
+                    $observaciones, $ordenRef, $haceFactura, $curso, $barrioId, $provincia, $ciudad, $activo, $id,
                 ]);
             } else {
                 $sql = 'INSERT INTO alumnos (codigo_legacy, nombre_completo, direccion, documento, condicion_iva, cuit,
-                  fecha_ingreso, fecha_inactivacion, estado_cuenta, observaciones, orden_referencia, hace_factura, curso, barrio_id, activo)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)';
+                  fecha_ingreso, fecha_inactivacion, estado_cuenta, observaciones, orden_referencia, hace_factura, curso, barrio_id, provincia, ciudad, activo)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)';
                 $st = $pdo->prepare($sql);
                 $st->execute([
                     $codigoLegacy, $nombre, $direccion ?: null, $documento,
                     $condicion, $cuit, $fechaIngSql, $fechaInaSql, $estadoCuenta,
-                    $observaciones, $ordenRef, $haceFactura, $curso, $barrioId, $activo,
+                    $observaciones, $ordenRef, $haceFactura, $curso, $barrioId, $provincia, $ciudad, $activo,
                 ]);
             }
         } catch (Throwable $e) {
@@ -158,9 +160,10 @@ if ($activoFiltro === 'activos') {
 
 $usaComponentesPago = db_has_column($pdo, 'pago_registrado', 'importe_capital')
     && db_has_column($pdo, 'pago_registrado', 'importe_interes')
+    && db_has_column($pdo, 'pago_registrado', 'importe_beca_perdida')
     && db_has_column($pdo, 'pago_registrado', 'importe_descuento');
 $haberExpr = $usaComponentesPago
-    ? 'COALESCE(NULLIF(importe_capital, 0), COALESCE(importe, 0)) + COALESCE(importe_interes, 0) - COALESCE(importe_descuento, 0)'
+    ? 'COALESCE(NULLIF(importe_capital, 0), COALESCE(importe, 0)) + COALESCE(importe_interes, 0) + COALESCE(importe_beca_perdida, 0) - COALESCE(importe_descuento, 0)'
     : 'COALESCE(importe, 0)';
 
 $sql = '
@@ -265,6 +268,8 @@ foreach ($barrios as $b) {
     echo '<option value="' . (int) $b['id'] . '"' . $sel . '>' . h($b['nombre']) . '</option>';
 }
 echo '</select></label>';
+echo '<label>Provincia <input name="provincia" maxlength="80" value="' . h($row['provincia'] ?? '') . '"></label>';
+echo '<label>Ciudad <input name="ciudad" maxlength="80" value="' . h($row['ciudad'] ?? '') . '"></label>';
 echo '<label>Documento <input name="documento" maxlength="20" value="' . h($row['documento'] ?? '') . '"></label>';
 echo '<label>Condición IVA <select name="condicion_iva">';
 foreach ($condiciones as $k => $lab) {

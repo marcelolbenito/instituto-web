@@ -36,6 +36,7 @@ function nav_main(): void
         ['conceptos_alumno.php', 'Conceptos', '✅'],
         ['generar_cuotas.php', 'Cuotas', '🧾'],
         ['parametros_cobranza.php', 'Parámetros', '⚙️'],
+        ['feriados.php', 'Feriados', '📅'],
     ];
     foreach ($links as [$href, $label, $icon]) {
         $isActive = $current === $href ? ' is-active' : '';

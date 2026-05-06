@@ -79,6 +79,7 @@ layout_start($config, 'Inicio');
         <a class="qa-item" href="barrios.php" title="Barrios"><span class="qa-icon">📍</span><span class="qa-label">Barrios</span></a>
         <a class="qa-item" href="rubros.php" title="Rubros"><span class="qa-icon">🗂️</span><span class="qa-label">Rubros</span></a>
         <a class="qa-item" href="parametros_cobranza.php" title="Parámetros de cobranza"><span class="qa-icon">⚙️</span><span class="qa-label">Cobranza</span></a>
+        <a class="qa-item" href="feriados.php" title="Feriados"><span class="qa-icon">📅</span><span class="qa-label">Feriados</span></a>
     </div>
 </section>
 

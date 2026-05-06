@@ -6,6 +6,9 @@ Cada fila representa un proceso real del usuario. No se arranca por tablas ni po
 codigo. Se arranca por "que hace hoy la persona" y se define como quedara en el
 sistema nuevo.
 
+Plan de ejecucion recomendado (Ola 1, ordenado por bloques y acciones):
+`docs/funcional/plan_ola1_orden_desarrollo.md`.
+
 Estados sugeridos:
 
 - Pendiente

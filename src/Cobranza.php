@@ -5,13 +5,19 @@ declare(strict_types=1);
  * N-ésimo día hábil del mes (lun–vie), empezando a contar desde el día 1 del calendario.
  * El día 1 cuenta como intento 1: si cae sábado/domingo, no suma hasta el primer hábil.
  */
-function cobranza_fecha_tope_pronto_pago(int $anio, int $mes, int $diasHabiles): DateTimeImmutable
+function cobranza_fecha_tope_pronto_pago(int $anio, int $mes, int $diasHabiles, array $fechasFeriado = []): DateTimeImmutable
 {
     $d = new DateTimeImmutable(sprintf('%04d-%02d-01', $anio, $mes));
     $habiles = 0;
+    $feriadosSet = [];
+    foreach ($fechasFeriado as $f) {
+        $feriadosSet[(string) $f] = true;
+    }
     while ($habiles < $diasHabiles) {
         $n = (int) $d->format('N');
-        if ($n < 6) {
+        $ymd = $d->format('Y-m-d');
+        $esFeriado = isset($feriadosSet[$ymd]);
+        if ($n < 6 && !$esFeriado) {
             $habiles++;
             if ($habiles === $diasHabiles) {
                 return $d;
@@ -154,6 +160,9 @@ function cobranza_saldo_impago_cuota(array $cuota): float
  *   importe_descuento:float,
  *   importe_recargo_variable:float,
  *   importe_recargo_fijo:float,
+ *   pierde_beca:bool,
+ *   fecha_tope_beca:string,
+ *   importe_beca_perdida:float,
  *   importe_capital:float,
  *   total_linea:float
  * }
@@ -168,10 +177,20 @@ function cobranza_calcular_linea_cuota(array $param, array $cuota, string $fecha
     $coefDiario = max(0.0, (float) ($param['recargo_coeficiente'] ?? 0));
     $descFijo = max(0.0, (float) ($param['bonificacion_pronto_pago'] ?? 0));
     $interesFijoMora = max(0.0, (float) ($param['importe_interes_mora_fijo'] ?? 0));
+    $difBeca = max(0.0, (float) ($cuota['importe_diferencia_beca'] ?? 0));
+    $tieneBeca = (int) ($cuota['tiene_beca'] ?? 0) === 1;
+    $abonoCompletoRef = max(0.0, (float) ($param['abono_completo_referencia_beca'] ?? 0));
 
-    $tope = cobranza_fecha_tope_pronto_pago($anio, $mes, $diasHabiles);
+    $fechasFeriado = is_array($param['fechas_feriado'] ?? null) ? $param['fechas_feriado'] : [];
+    $tope = cobranza_fecha_tope_pronto_pago($anio, $mes, $diasHabiles, $fechasFeriado);
+    $topeBeca = cobranza_fecha_tope_pronto_pago($anio, $mes, 5, $fechasFeriado);
     $fp = new DateTimeImmutable($fechaPagoYmd);
     $dentro = $fp <= $tope;
+    if ($difBeca <= 0.00001 && $tieneBeca && $abonoCompletoRef > 0.00001) {
+        // Autocálculo: si la cuota fue generada con valor becado, la diferencia es contra abono completo referencia.
+        $difBeca = max(0.0, round($abonoCompletoRef - $saldo, 2));
+    }
+    $pierdeBeca = $difBeca > 0.00001 && $fp > $topeBeca;
     $diasMora = $dentro ? 0 : cobranza_dias_mora_calendario($tope, $fp);
 
     $desc = 0.0;
@@ -186,7 +205,8 @@ function cobranza_calcular_linea_cuota(array $param, array $cuota, string $fecha
         $capital = $saldo;
     }
 
-    $total = round($capital + $recVar + $recFijo, 2);
+    $impBecaPerdida = $pierdeBeca ? round($difBeca, 2) : 0.0;
+    $total = round($capital + $recVar + $recFijo + $impBecaPerdida, 2);
 
     return [
         'fecha_tope_pronto' => $tope->format('Y-m-d'),
@@ -196,6 +216,9 @@ function cobranza_calcular_linea_cuota(array $param, array $cuota, string $fecha
         'importe_descuento' => round($desc, 2),
         'importe_recargo_variable' => $recVar,
         'importe_recargo_fijo' => $recFijo,
+        'pierde_beca' => $pierdeBeca,
+        'fecha_tope_beca' => $topeBeca->format('Y-m-d'),
+        'importe_beca_perdida' => $impBecaPerdida,
         'importe_capital' => $capital,
         'total_linea' => $total,
     ];

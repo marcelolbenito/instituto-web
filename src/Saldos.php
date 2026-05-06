@@ -58,17 +58,19 @@ function recalcular_saldo_alumnos(\PDO $pdo, ?int $alumnoId = null, ?string $fec
          FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE()
            AND TABLE_NAME = 'pago_registrado'
-           AND COLUMN_NAME IN ('importe_capital', 'importe_interes', 'importe_descuento')"
+          AND COLUMN_NAME IN ('importe_capital', 'importe_interes', 'importe_beca_perdida', 'importe_descuento')"
     );
     if ($stCols !== false) {
         $cols = $stCols->fetchAll(\PDO::FETCH_COLUMN);
         $usaComponentesPago = in_array('importe_capital', $cols, true)
             && in_array('importe_interes', $cols, true)
+            && in_array('importe_beca_perdida', $cols, true)
             && in_array('importe_descuento', $cols, true);
     }
     $haberExpr = $usaComponentesPago
         ? 'COALESCE(NULLIF(importe_capital, 0), COALESCE(importe, 0))
            + COALESCE(importe_interes, 0)
+           + COALESCE(importe_beca_perdida, 0)
            - COALESCE(importe_descuento, 0)'
         : 'COALESCE(importe, 0)';
 

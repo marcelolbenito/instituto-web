@@ -20,6 +20,47 @@ function cobro_fmt_money(float $value): string
     return '$ ' . number_format($value, 2, ',', '.');
 }
 
+/**
+ * Feriados aplicables para una jurisdicción (nacional + provincia + ciudad).
+ *
+ * @return string[] Fechas Y-m-d
+ */
+function cobro_fechas_feriado(PDO $pdo, ?string $provincia, ?string $ciudad): array
+{
+    if (!db_has_column($pdo, 'feriados', 'fecha')) {
+        return [];
+    }
+    $prov = trim((string) ($provincia ?? ''));
+    $ciu = trim((string) ($ciudad ?? ''));
+    $params = [];
+    $sql = "SELECT fecha FROM feriados WHERE ambito = 'nacional'";
+    if ($prov !== '') {
+        $sql .= " OR (ambito = 'provincia' AND UPPER(COALESCE(provincia, '')) = UPPER(?))";
+        $params[] = $prov;
+    }
+    if ($ciu !== '') {
+        if ($prov !== '') {
+            $sql .= " OR (ambito = 'ciudad' AND UPPER(COALESCE(provincia, '')) = UPPER(?) AND UPPER(COALESCE(ciudad, '')) = UPPER(?))";
+            $params[] = $prov;
+            $params[] = $ciu;
+        } else {
+            $sql .= " OR (ambito = 'ciudad' AND UPPER(COALESCE(ciudad, '')) = UPPER(?))";
+            $params[] = $ciu;
+        }
+    }
+    $st = $pdo->prepare($sql);
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_COLUMN);
+    $out = [];
+    foreach ($rows as $f) {
+        $v = trim((string) $f);
+        if ($v !== '') {
+            $out[$v] = true;
+        }
+    }
+    return array_keys($out);
+}
+
 $pdo = Db::pdo($config);
 $fechaCorteCobro = saldo_corte_desde();
 
@@ -28,6 +69,9 @@ $hasPacDetalle = db_has_column($pdo, 'pago_aplica_cuota', 'importe_capital')
     && db_has_column($pdo, 'pago_aplica_cuota', 'importe_descuento');
 
 $hasPagoComponentes = db_has_column($pdo, 'pago_registrado', 'importe_capital');
+$hasBecaRegla = db_has_column($pdo, 'cuota_mensual', 'importe_diferencia_beca')
+    && db_has_column($pdo, 'pago_registrado', 'importe_beca_perdida')
+    && db_has_column($pdo, 'pago_aplica_cuota', 'importe_beca_perdida');
 
 $alumnoId = isset($_GET['alumno_id']) ? (int) $_GET['alumno_id'] : 0;
 $buscar = trim((string) ($_GET['q'] ?? ''));
@@ -54,6 +98,17 @@ if ($alumnoId <= 0 && $buscar !== '') {
 
 $param = $pdo->query('SELECT * FROM parametros_cobranza WHERE id = 1')->fetch() ?: [];
 $coef = (float) ($param['recargo_coeficiente'] ?? 0);
+$stAbonoRef = $pdo->query(
+    "SELECT COALESCE(MAX(importe_referencia), 0)
+     FROM articulos
+     WHERE activo = 1
+       AND es_abono = 1
+       AND importe_referencia > 0
+       AND UPPER(detalle) NOT LIKE '%BECA%'
+       AND UPPER(detalle) NOT LIKE '%DESCUENTO%'"
+);
+$abonoCompletoRefBeca = $stAbonoRef ? round((float) $stAbonoRef->fetchColumn(), 2) : 0.0;
+$param['abono_completo_referencia_beca'] = $abonoCompletoRefBeca;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $alumnoId = (int) ($_POST['alumno_id'] ?? 0);
@@ -63,10 +118,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    if (!$hasPacDetalle || !$hasPagoComponentes) {
+    if (!$hasPacDetalle || !$hasPagoComponentes || !$hasBecaRegla) {
         header(
             'Location: registrar_cobro.php?alumno_id=' . $alumnoId . '&fecha_pago=' . rawurlencode($fechaPago)
-                . '&err=' . rawurlencode('Falta migración 14 y/o 16 (pagos y detalle por cuota).')
+                . '&err=' . rawurlencode('Falta migración 14, 16 y/o 17 (pagos, detalle por cuota y BECA fuera de término).')
         );
         exit;
     }
@@ -87,16 +142,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    $stAl = $pdo->prepare('SELECT id, nombre_completo, documento, activo FROM alumnos WHERE id = ?');
+    $stAl = $pdo->prepare('SELECT id, nombre_completo, documento, activo, provincia, ciudad FROM alumnos WHERE id = ?');
     $stAl->execute([$alumnoId]);
     $al = $stAl->fetch();
     if (!$al || (int) ($al['activo'] ?? 0) !== 1) {
         header('Location: registrar_cobro.php?err=' . rawurlencode('Alumno inexistente o inactivo.'));
         exit;
     }
+    $param['fechas_feriado'] = cobro_fechas_feriado($pdo, (string) ($al['provincia'] ?? ''), (string) ($al['ciudad'] ?? ''));
 
     $stCu = $pdo->prepare(
-        'SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum
+        'SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
+                EXISTS(
+                    SELECT 1
+                    FROM alumno_articulo aa_b
+                    JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
+                    WHERE aa_b.alumno_id = cm.alumno_id
+                      AND ar_b.activo = 1
+                      AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
+                ) AS tiene_beca
          FROM cuota_mensual cm
          LEFT JOIN (
             SELECT cuota_id, SUM(importe_aplicado) AS aplicado
@@ -120,6 +184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $sumCap = 0.0;
     $sumRec = 0.0;
     $sumDesc = 0.0;
+    $sumBeca = 0.0;
     foreach ($cuotas as $c) {
         $lineas[] = ['cuota' => $c, 'calc' => cobranza_calcular_linea_cuota($param, $c, $fechaPago)];
     }
@@ -127,16 +192,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $sumCap += $L['calc']['importe_capital'];
         $sumRec += $L['calc']['importe_recargo_variable'] + $L['calc']['importe_recargo_fijo'];
         $sumDesc += $L['calc']['importe_descuento'];
+        $sumBeca += $L['calc']['importe_beca_perdida'];
     }
-    $total = round($sumCap + $sumRec, 2);
+    $total = round($sumCap + $sumRec + $sumBeca, 2);
 
     $ref = 'COBRO:' . $fechaPago . ':' . implode('-', array_map(static fn ($x) => (string) $x['cuota']['id'], $lineas));
 
     $pdo->beginTransaction();
     try {
         $insP = $pdo->prepare(
-            'INSERT INTO pago_registrado (alumno_id, fecha_pago, importe, importe_capital, importe_interes, importe_descuento, medio, referencia, nota)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO pago_registrado (alumno_id, fecha_pago, importe, importe_capital, importe_interes, importe_beca_perdida, importe_descuento, medio, referencia, nota)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $nota = 'Cobro múltiple; recargo diario coef=' . (string) $coef;
         $insP->execute([
@@ -145,6 +211,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $total,
             round($sumCap, 2),
             round($sumRec, 2),
+            round($sumBeca, 2),
             round($sumDesc, 2),
             $medio,
             $ref,
@@ -152,17 +219,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
         $pagoId = (int) $pdo->lastInsertId();
 
-        $upd = $pdo->prepare('UPDATE cuota_mensual SET saldo = 0, estado = \'pagada\' WHERE id = ?');
+        $upd = $pdo->prepare(
+            'UPDATE cuota_mensual
+             SET saldo = 0,
+                 estado = \'pagada\',
+                 importe_diferencia_beca = CASE
+                    WHEN ? > 0 AND COALESCE(importe_diferencia_beca, 0) <= 0 THEN ?
+                    ELSE importe_diferencia_beca
+                 END
+             WHERE id = ?'
+        );
         $insA = $pdo->prepare(
-            'INSERT INTO pago_aplica_cuota (pago_id, cuota_id, importe_aplicado, importe_capital, dias_mora, importe_recargo, importe_descuento)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO pago_aplica_cuota (pago_id, cuota_id, importe_aplicado, importe_capital, dias_mora, importe_recargo, importe_descuento, importe_beca_perdida)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
 
         foreach ($lineas as $L) {
             $c = $L['cuota'];
             $calc = $L['calc'];
             $cid = (int) $c['id'];
-            $upd->execute([$cid]);
+            $upd->execute([
+                round($calc['importe_beca_perdida'], 2),
+                round($calc['importe_beca_perdida'], 2),
+                $cid,
+            ]);
             $recTot = round($calc['importe_recargo_variable'] + $calc['importe_recargo_fijo'], 2);
             $insA->execute([
                 $pagoId,
@@ -172,6 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $calc['dias_mora'],
                 $recTot,
                 $calc['importe_descuento'],
+                $calc['importe_beca_perdida'],
             ]);
         }
 
@@ -202,15 +283,24 @@ if (!is_array($cuotaSelGet)) {
 $cuotaSelGet = array_values(array_unique(array_filter(array_map('intval', $cuotaSelGet), static fn (int $v): bool => $v > 0)));
 
 if ($alumnoId > 0) {
-    $stAl = $pdo->prepare('SELECT id, nombre_completo, codigo_legacy, documento, activo FROM alumnos WHERE id = ?');
+    $stAl = $pdo->prepare('SELECT id, nombre_completo, codigo_legacy, documento, activo, provincia, ciudad FROM alumnos WHERE id = ?');
     $stAl->execute([$alumnoId]);
     $alumno = $stAl->fetch();
     if ($alumno && (int) ($alumno['activo'] ?? 0) === 1) {
+        $param['fechas_feriado'] = cobro_fechas_feriado($pdo, (string) ($alumno['provincia'] ?? ''), (string) ($alumno['ciudad'] ?? ''));
         $anioOp = cobranza_anio_operativo_desde();
         $sqlPend = 'SELECT
                 cm.*,
                 COALESCE(pa.aplicado, 0) AS aplicado_acum,
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
+                EXISTS(
+                    SELECT 1
+                    FROM alumno_articulo aa_b
+                    JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
+                    WHERE aa_b.alumno_id = cm.alumno_id
+                      AND ar_b.activo = 1
+                      AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
+                ) AS tiene_beca,
                 COALESCE(
                     cm.fecha_vencimiento,
                     STR_TO_DATE(CONCAT(cm.anio, "-", LPAD(cm.mes, 2, "0"), "-01"), "%Y-%m-%d")
@@ -248,6 +338,14 @@ if ($alumnoId > 0) {
                 cm.*,
                 COALESCE(pa.aplicado, 0) AS aplicado_acum,
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
+                EXISTS(
+                    SELECT 1
+                    FROM alumno_articulo aa_b
+                    JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
+                    WHERE aa_b.alumno_id = cm.alumno_id
+                      AND ar_b.activo = 1
+                      AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
+                ) AS tiene_beca,
                 COALESCE(
                     cm.fecha_vencimiento,
                     STR_TO_DATE(CONCAT(cm.anio, "-", LPAD(cm.mes, 2, "0"), "-01"), "%Y-%m-%d")
@@ -283,7 +381,15 @@ if ($alumnoId > 0) {
             } else {
                 $placeholders = implode(',', array_fill(0, count($cuotaSelGet), '?'));
                 $stCu = $pdo->prepare(
-                    "SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum
+                    "SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
+                            EXISTS(
+                                SELECT 1
+                                FROM alumno_articulo aa_b
+                                JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
+                                WHERE aa_b.alumno_id = cm.alumno_id
+                                  AND ar_b.activo = 1
+                                  AND UPPER(ar_b.detalle) LIKE '%BECA%'
+                            ) AS tiene_beca
                      FROM cuota_mensual cm
                      LEFT JOIN (
                         SELECT cuota_id, SUM(importe_aplicado) AS aplicado
@@ -352,10 +458,11 @@ echo '<li>Pulsá <strong>Calcular importes</strong>: ahí se aplican descuento (
 echo '<li>Revisá el detalle y confirmá con <strong>Registrar cobro</strong>.</li>';
 echo '</ol>';
 echo '<p class="muted">Recargo variable: <code>saldo × coef. diario × días de mora</code> (días calendario tras el tope en días hábiles). '
-    . 'Descuento: monto fijo de <a href="parametros_cobranza.php">parámetros</a> si la fecha de pago entra en pronto pago del mes de esa cuota.</p>';
+    . 'Descuento: monto fijo de <a href="parametros_cobranza.php">parámetros</a> si la fecha de pago entra en pronto pago del mes de esa cuota. '
+    . 'Días hábiles consideran feriados configurados en <a href="feriados.php">Feriados</a>.</p>';
 
-if (!$hasPacDetalle || !$hasPagoComponentes) {
-    echo '<p class="err">Requiere migraciones <code>14_pagos_componentes_interes_descuento.sql</code> y <code>16_pago_aplica_cuota_detalle.sql</code>.</p>';
+if (!$hasPacDetalle || !$hasPagoComponentes || !$hasBecaRegla) {
+    echo '<p class="err">Requiere migraciones <code>14_pagos_componentes_interes_descuento.sql</code>, <code>16_pago_aplica_cuota_detalle.sql</code> y <code>17_beca_fuera_termino_quinto_habil.sql</code>.</p>';
 }
 
 echo '<form method="get" class="search-form">';
@@ -513,21 +620,24 @@ if ($alumnoId > 0 && !$alumno) {
             $sumCap = 0.0;
             $sumRec = 0.0;
             $sumDesc = 0.0;
+            $sumBeca = 0.0;
             $sumTot = 0.0;
             foreach ($lineasCalc as $L) {
                 $x = $L['calc'];
                 $sumCap += $x['importe_capital'];
                 $sumRec += $x['importe_recargo_variable'] + $x['importe_recargo_fijo'];
                 $sumDesc += $x['importe_descuento'];
+                $sumBeca += $x['importe_beca_perdida'];
                 $sumTot += $x['total_linea'];
             }
             $sumTot = round($sumTot, 2);
 
             echo '<h2>2) Detalle del cobro (fecha ' . h($fechaPago) . ')</h2>';
-            echo '<p class="muted"><strong>P</strong> = pronto pago (aplica descuento fijo según parámetros). Sin <strong>P</strong> = fuera del tope (mora / recargo diario).</p>';
+            echo '<p class="muted"><strong>P</strong> = pronto pago (aplica descuento fijo según parámetros). Sin <strong>P</strong> = fuera del tope (mora / recargo diario). '
+                . 'Si la cuota tiene BECA, después del <strong>5° día hábil</strong> se suma diferencia de BECA.</p>';
             echo '<table class="table js-data-table"><thead><tr>';
             echo '<th>Período</th><th>P</th><th>Saldo base</th><th>Tope pronto</th><th>Mora (días)</th>';
-            echo '<th>Desc.</th><th>Recargo var.</th><th>Rec. fijo</th><th>Capital</th><th>Total línea</th>';
+            echo '<th>Desc.</th><th>Recargo var.</th><th>Rec. fijo</th><th>Dif. BECA</th><th>Capital</th><th>Total línea</th>';
             echo '</tr></thead><tbody>';
             foreach ($lineasCalc as $row) {
                 $c = $row['cuota'];
@@ -545,15 +655,16 @@ if ($alumnoId > 0 && !$alumno) {
                 echo '<td>$ ' . number_format($x['importe_descuento'], 2, ',', '.') . '</td>';
                 echo '<td>$ ' . number_format($x['importe_recargo_variable'], 2, ',', '.') . '</td>';
                 echo '<td>$ ' . number_format($x['importe_recargo_fijo'], 2, ',', '.') . '</td>';
+                echo '<td>$ ' . number_format($x['importe_beca_perdida'], 2, ',', '.') . '</td>';
                 echo '<td>$ ' . number_format($x['importe_capital'], 2, ',', '.') . '</td>';
                 echo '<td><strong>$ ' . number_format($x['total_linea'], 2, ',', '.') . '</strong></td>';
                 echo '</tr>';
             }
             echo '</tbody></table>';
             echo '<p><strong>Total a cobrar:</strong> $ ' . number_format($sumTot, 2, ',', '.') . ' '
-                . '(capital $ ' . number_format($sumCap, 2, ',', '.') . ' + recargos $ ' . number_format($sumRec, 2, ',', '.') . ' — descuentos $ ' . number_format($sumDesc, 2, ',', '.') . ')</p>';
+                . '(capital $ ' . number_format($sumCap, 2, ',', '.') . ' + recargos $ ' . number_format($sumRec, 2, ',', '.') . ' + dif. BECA $ ' . number_format($sumBeca, 2, ',', '.') . ' — descuentos $ ' . number_format($sumDesc, 2, ',', '.') . ')</p>';
 
-            if ($hasPacDetalle && $hasPagoComponentes) {
+            if ($hasPacDetalle && $hasPagoComponentes && $hasBecaRegla) {
                 echo '<h2>3) Confirmar</h2>';
                 echo '<form method="post" class="form form-grid" style="max-width:22rem">';
                 echo '<input type="hidden" name="confirmar_cobro" value="1">';
@@ -576,12 +687,13 @@ if ($alumnoId > 0 && !$alumno) {
 if ($pagoRecibo && count($lineasRecibo) > 0) {
     echo '<h2 id="recibo">Recibo #' . (int) $pagoRecibo['id'] . '</h2>';
     echo '<p>Fecha pago: ' . h((string) $pagoRecibo['fecha_pago']) . ' · Medio: ' . h((string) ($pagoRecibo['medio'] ?? '')) . '</p>';
-    echo '<table class="table"><thead><tr><th>Período</th><th>Capital</th><th>Recargo</th><th>Desc.</th><th>Días mora</th></tr></thead><tbody>';
+    echo '<table class="table"><thead><tr><th>Período</th><th>Capital</th><th>Recargo</th><th>Dif. BECA</th><th>Desc.</th><th>Días mora</th></tr></thead><tbody>';
     foreach ($lineasRecibo as $lr) {
         $per = (int) $lr['anio'] . '-' . str_pad((string) ((int) $lr['mes']), 2, '0', STR_PAD_LEFT);
         $rec = (float) ($lr['importe_recargo'] ?? 0);
         echo '<tr><td>' . h($per) . '</td><td>$ ' . number_format((float) ($lr['importe_capital'] ?? 0), 2, ',', '.') . '</td>';
         echo '<td>$ ' . number_format($rec, 2, ',', '.') . '</td>';
+        echo '<td>$ ' . number_format((float) ($lr['importe_beca_perdida'] ?? 0), 2, ',', '.') . '</td>';
         echo '<td>$ ' . number_format((float) ($lr['importe_descuento'] ?? 0), 2, ',', '.') . '</td>';
         echo '<td>' . (int) ($lr['dias_mora'] ?? 0) . '</td></tr>';
     }
