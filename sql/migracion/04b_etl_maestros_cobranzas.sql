@@ -49,7 +49,11 @@ WHERE procesado = 0
   AND NOT EXISTS (
     SELECT 1
     FROM staging_fox_clientes c
-    WHERE c.codigo = COALESCE(staging_fox_pagos.codigo_cliente_legacy, staging_fox_pagos.ficha, staging_fox_pagos.ncuenta)
+    WHERE c.codigo = COALESCE(
+      NULLIF(staging_fox_pagos.codigo_cliente_legacy, 0),
+      NULLIF(staging_fox_pagos.ficha, 0),
+      NULLIF(staging_fox_pagos.ncuenta, 0)
+    )
   );
 
 -- 3) Barrios (inferidos de staging_fox_clientes)
@@ -74,7 +78,7 @@ SELECT
   CAST(COALESCE(NULLIF(c.ndoc, 0), NULLIF(c.nrocuit, 0)) AS CHAR(20)),
   c.observ,
   b.id,
-  CASE WHEN COALESCE(c.estado, 1) = 1 THEN 1 ELSE 0 END
+  1
 FROM staging_fox_clientes c
 LEFT JOIN barrios b
   ON b.codigo_legacy <=> c.codbarrio
@@ -131,6 +135,48 @@ VALUES (1, 1, 5, 0.00000, 0.00)
 ON DUPLICATE KEY UPDATE
   id = id;
 
+-- Dataset temporal para reutilizar PAGOS válidos y evitar recalcular COALESCE/NULLIF muchas veces.
+DROP TEMPORARY TABLE IF EXISTS tmp_staging_pagos_validos;
+CREATE TEMPORARY TABLE tmp_staging_pagos_validos (
+  id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  codigo_efectivo INT NOT NULL,
+  ncuenta INT NULL,
+  anio SMALLINT NOT NULL,
+  mes TINYINT NOT NULL,
+  saldo DECIMAL(12,2) NULL,
+  s_cuota DECIMAL(12,2) NULL,
+  debe DECIMAL(12,2) NULL,
+  haber DECIMAL(12,2) NULL,
+  fecha DATE NULL,
+  pago CHAR(1) NULL,
+  KEY idx_tmp_pag_codigo_periodo (codigo_efectivo, anio, mes)
+) ENGINE=InnoDB;
+
+INSERT INTO tmp_staging_pagos_validos (
+  id, codigo_efectivo, ncuenta, anio, mes, saldo, s_cuota, debe, haber, fecha, pago
+)
+SELECT
+  p.id,
+  COALESCE(
+    NULLIF(p.codigo_cliente_legacy, 0),
+    NULLIF(p.ficha, 0),
+    NULLIF(p.ncuenta, 0)
+  ) AS codigo_efectivo,
+  p.ncuenta,
+  p.anio,
+  p.mes,
+  p.saldo,
+  p.s_cuota,
+  p.debe,
+  p.haber,
+  p.fecha,
+  p.pago
+FROM staging_fox_pagos p
+WHERE p.procesado = 0
+  AND p.error_msg IS NULL
+  AND p.anio IS NOT NULL
+  AND p.mes BETWEEN 1 AND 12;
+
 -- 8) Cuotas mensuales desde PAGOS
 -- Regla simple inicial:
 --   importe_original = s_cuota (si no, debe)
@@ -163,12 +209,8 @@ FROM (
     MAX(COALESCE(p.saldo, 0.00)) AS saldo_max,
     MAX(COALESCE(p.ncuenta, 0)) AS ncuenta_ref,
     COUNT(*) AS filas
-  FROM staging_fox_pagos p
-  JOIN alumnos al ON al.codigo_legacy = COALESCE(p.codigo_cliente_legacy, p.ficha, p.ncuenta)
-  WHERE p.procesado = 0
-    AND p.error_msg IS NULL
-    AND p.anio IS NOT NULL
-    AND p.mes BETWEEN 1 AND 12
+  FROM tmp_staging_pagos_validos p
+  JOIN alumnos al ON al.codigo_legacy = p.codigo_efectivo
   GROUP BY al.id, p.anio, p.mes
 ) agg
 ON DUPLICATE KEY UPDATE
@@ -194,11 +236,9 @@ SELECT
   'legacy',
   CONCAT('PAGOS:ncuenta=', COALESCE(p.ncuenta, 0)),
   'Migrado desde PAGOS'
-FROM staging_fox_pagos p
-JOIN alumnos al ON al.codigo_legacy = COALESCE(p.codigo_cliente_legacy, p.ficha, p.ncuenta)
-WHERE p.procesado = 0
-  AND p.error_msg IS NULL
-  AND (
+FROM tmp_staging_pagos_validos p
+JOIN alumnos al ON al.codigo_legacy = p.codigo_efectivo
+WHERE (
     COALESCE(p.haber, 0) > 0
     OR UPPER(COALESCE(p.pago, 'N')) IN ('S', 'Y', '1', 'P')
   );
@@ -212,16 +252,17 @@ SELECT
 FROM pago_registrado pr
 JOIN cuota_mensual cm
   ON cm.alumno_id = pr.alumno_id
-JOIN staging_fox_pagos p
-  ON COALESCE(p.codigo_cliente_legacy, p.ficha, p.ncuenta) = (
-      SELECT a.codigo_legacy FROM alumnos a WHERE a.id = pr.alumno_id
-     )
+JOIN alumnos al
+  ON al.id = pr.alumno_id
+JOIN (
+  SELECT DISTINCT codigo_efectivo, anio, mes
+  FROM tmp_staging_pagos_validos
+) p
+  ON p.codigo_efectivo = al.codigo_legacy
  AND p.anio = cm.anio
  AND p.mes = cm.mes
 WHERE pr.medio = 'legacy'
-  AND pr.nota = 'Migrado desde PAGOS'
-  AND p.procesado = 0
-  AND p.error_msg IS NULL;
+  AND pr.nota = 'Migrado desde PAGOS';
 
 -- 11) Marcar staging como procesado
 UPDATE staging_fox_clientes SET procesado = 1 WHERE procesado = 0 AND error_msg IS NULL;
