@@ -58,6 +58,31 @@ El listado de **registrar cobro** **no** aplica el filtro por fecha de `SALDO_CO
 - `cobranza_badge_abono_parcial_html()`, `cobranza_badge_liquidada_html()`
 - `cobranza_estado_visual_cobro_html()`
 
+## Recargo por mora (`parametros_cobranza.recargo_coeficiente`)
+
+- Valor en pantalla = **% mensual** Fox (`PORCEN.RECARGO`, ej. `5`).
+- % por día = `RECARGO / 30`; % acumulado = `%/día × días_mora`; recargo $ = `saldo × % acumulado / 100`.
+
+## Obligaciones vencidas (`cc_ajuste_debe`)
+
+- Filas con `pago_id IS NULL` y referencia **distinta** de `AJUSTE:manual:` se tratan como **obligación vencida**: misma regla de pronto pago / mora que cuotas, usando el **mes de `fecha_mov`** y la **fecha del recibo**.
+- `AJUSTE:manual:` (pantalla Cargar debe manual) sigue con **importe fijo**, sin recargo.
+
+## Contramovimiento en CC (mora / beca / recargo medio)
+
+Al confirmar un recibo, además del **haber** (`pago_registrado.importe`), se insertan filas en `cc_ajuste_debe` con referencia `RECIBO_INC:…` por:
+
+- mora/recargo de cada cuota (`MORA-C{cuota_id}`);
+- beca fuera de término (`BECA-C{cuota_id}`);
+- mora/beca de obligaciones cobradas (`MORA-A` / `BECA-A`);
+- recargo por forma de pago (`MEDIO-R`).
+
+Sin esos **debe**, el haber del recibo supera al cargo base de la cuota y el saldo queda negativo (ej. pagó mora pero CC solo tenía el abono original).
+
+Los ítems de artículo del recibo siguen usando `RECIBO_ITEM:` (misma idea).
+
+Reparación histórica: `php tools/reparar_cc_incrementos_cobro.php [alumno_id]` y luego verificar CC.
+
 ## Pendientes naturales para otra iteración
 
 - Corregir en datos **`cuota_mensual.estado`** donde quedó `pagada` inconsistente.

@@ -33,10 +33,7 @@ function recalcular_saldo_alumnos(\PDO $pdo, ?int $alumnoId = null, ?string $fec
 
     if ($fechaCorte !== null) {
         $whereCuotas = "
-            WHERE COALESCE(
-                cm.fecha_vencimiento,
-                STR_TO_DATE(CONCAT(cm.anio, '-', LPAD(cm.mes, 2, '0'), '-01'), '%Y-%m-%d')
-            ) >= ?
+            WHERE STR_TO_DATE(CONCAT(cm.anio, '-', LPAD(cm.mes, 2, '0'), '-01'), '%Y-%m-%d') >= ?
         ";
         $wherePagos = "
             WHERE fecha_pago >= ?
@@ -74,6 +71,30 @@ function recalcular_saldo_alumnos(\PDO $pdo, ?int $alumnoId = null, ?string $fec
            - COALESCE(importe_descuento, 0)'
         : 'COALESCE(importe, 0)';
 
+    $hasCcAjusteDebe = false;
+    $stTabAdj = $pdo->query(
+        "SELECT COUNT(*)
+         FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'cc_ajuste_debe'"
+    );
+    if ($stTabAdj !== false) {
+        $hasCcAjusteDebe = (int) $stTabAdj->fetchColumn() > 0;
+    }
+    $joinAjuste = $hasCcAjusteDebe
+        ? 'LEFT JOIN (
+            SELECT alumno_id,
+                SUM(CASE WHEN pago_id IS NULL THEN COALESCE(debe, 0) ELSE 0 END) AS debe_pendiente,
+                SUM(CASE WHEN referencia LIKE \'RECIBO_INC:%\' THEN COALESCE(debe, 0) ELSE 0 END) AS debe_incrementos
+            FROM cc_ajuste_debe
+            WHERE COALESCE(debe, 0) > 0.005
+            GROUP BY alumno_id
+        ) da ON da.alumno_id = a.id'
+        : '';
+    $exprAjuste = $hasCcAjusteDebe
+        ? 'COALESCE(da.debe_pendiente, 0) + COALESCE(da.debe_incrementos, 0)'
+        : '0';
+
     $sql = '
         UPDATE alumnos a
         LEFT JOIN (
@@ -95,6 +116,7 @@ function recalcular_saldo_alumnos(\PDO $pdo, ?int $alumnoId = null, ?string $fec
             ' . $whereCuotas . '
             GROUP BY cm.alumno_id
         ) d ON d.alumno_id = a.id
+        ' . $joinAjuste . '
         LEFT JOIN (
             SELECT
                 alumno_id,
@@ -103,7 +125,7 @@ function recalcular_saldo_alumnos(\PDO $pdo, ?int $alumnoId = null, ?string $fec
             ' . $wherePagos . '
             GROUP BY alumno_id
         ) h ON h.alumno_id = a.id
-        SET a.saldo_cc = ROUND(COALESCE(d.debe_total, 0) - COALESCE(h.haber_total, 0), 2)
+        SET a.saldo_cc = ROUND(COALESCE(d.debe_total, 0) + ' . $exprAjuste . ' - COALESCE(h.haber_total, 0), 2)
     ';
 
     if ($alumnoId !== null && $alumnoId > 0) {
