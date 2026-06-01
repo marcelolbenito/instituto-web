@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /**
  * Recalcula y persiste saldo de cuenta corriente por alumno.
- * Saldo = Debe histórico (cuotas) - Haber histórico (pagos).
+ * Usa la misma lógica que cuenta corriente (vista operativa / simple).
  */
 function saldo_corte_desde(): ?string
 {
@@ -14,129 +14,34 @@ function saldo_corte_desde(): ?string
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw) !== 1) {
         return null;
     }
+
     return $raw;
 }
 
 function recalcular_saldo_alumnos(\PDO $pdo, ?int $alumnoId = null, ?string $fechaCorte = null): int
 {
-    $fechaCorte = $fechaCorte ?: saldo_corte_desde();
-    $periodoCorte = null;
-    if ($fechaCorte !== null) {
-        $tsCorte = strtotime($fechaCorte);
-        if ($tsCorte !== false) {
-            $periodoCorte = date('Y-m', $tsCorte);
-        }
-    }
-    $whereCuotas = '';
-    $wherePagos = '';
-    $params = [];
+    require_once __DIR__ . '/CuentaCorrienteMovimientos.php';
 
-    if ($fechaCorte !== null) {
-        $whereCuotas = "
-            WHERE STR_TO_DATE(CONCAT(cm.anio, '-', LPAD(cm.mes, 2, '0'), '-01'), '%Y-%m-%d') >= ?
-        ";
-        $wherePagos = "
-            WHERE fecha_pago >= ?
-              AND NOT (
-                medio = 'legacy'
-                AND referencia LIKE 'PAGOS:ncuenta=%:%'
-                AND RIGHT(referencia, 7) REGEXP '^[0-9]{4}-[0-9]{2}$'
-                AND RIGHT(referencia, 7) < ?
-              )
-        ";
-        $params[] = $fechaCorte;
-        $params[] = $fechaCorte;
-        $params[] = $periodoCorte ?? substr($fechaCorte, 0, 7);
-    }
-
-    $usaComponentesPago = false;
-    $stCols = $pdo->query(
-        "SELECT COLUMN_NAME
-         FROM information_schema.COLUMNS
-         WHERE TABLE_SCHEMA = DATABASE()
-           AND TABLE_NAME = 'pago_registrado'
-          AND COLUMN_NAME IN ('importe_capital', 'importe_interes', 'importe_beca_perdida', 'importe_descuento')"
-    );
-    if ($stCols !== false) {
-        $cols = $stCols->fetchAll(\PDO::FETCH_COLUMN);
-        $usaComponentesPago = in_array('importe_capital', $cols, true)
-            && in_array('importe_interes', $cols, true)
-            && in_array('importe_beca_perdida', $cols, true)
-            && in_array('importe_descuento', $cols, true);
-    }
-    $haberExpr = $usaComponentesPago
-        ? 'COALESCE(NULLIF(importe_capital, 0), COALESCE(importe, 0))
-           + COALESCE(importe_interes, 0)
-           + COALESCE(importe_beca_perdida, 0)
-           - COALESCE(importe_descuento, 0)'
-        : 'COALESCE(importe, 0)';
-
-    $hasCcAjusteDebe = false;
-    $stTabAdj = $pdo->query(
-        "SELECT COUNT(*)
-         FROM information_schema.TABLES
-         WHERE TABLE_SCHEMA = DATABASE()
-           AND TABLE_NAME = 'cc_ajuste_debe'"
-    );
-    if ($stTabAdj !== false) {
-        $hasCcAjusteDebe = (int) $stTabAdj->fetchColumn() > 0;
-    }
-    $joinAjuste = $hasCcAjusteDebe
-        ? 'LEFT JOIN (
-            SELECT alumno_id,
-                SUM(CASE WHEN pago_id IS NULL THEN COALESCE(debe, 0) ELSE 0 END) AS debe_pendiente,
-                SUM(CASE WHEN referencia LIKE \'RECIBO_INC:%\' THEN COALESCE(debe, 0) ELSE 0 END) AS debe_incrementos
-            FROM cc_ajuste_debe
-            WHERE COALESCE(debe, 0) > 0.005
-            GROUP BY alumno_id
-        ) da ON da.alumno_id = a.id'
-        : '';
-    $exprAjuste = $hasCcAjusteDebe
-        ? 'COALESCE(da.debe_pendiente, 0) + COALESCE(da.debe_incrementos, 0)'
-        : '0';
-
-    $sql = '
-        UPDATE alumnos a
-        LEFT JOIN (
-            SELECT
-                cm.alumno_id,
-                SUM(
-                    CASE
-                        WHEN COALESCE(cm.importe_original, 0) > 0
-                            THEN cm.importe_original
-                        ELSE COALESCE(cm.saldo, 0) + COALESCE(pa.aplicado, 0)
-                    END
-                ) AS debe_total
-            FROM cuota_mensual cm
-            LEFT JOIN (
-                SELECT cuota_id, SUM(importe_aplicado) AS aplicado
-                FROM pago_aplica_cuota
-                GROUP BY cuota_id
-            ) pa ON pa.cuota_id = cm.id
-            ' . $whereCuotas . '
-            GROUP BY cm.alumno_id
-        ) d ON d.alumno_id = a.id
-        ' . $joinAjuste . '
-        LEFT JOIN (
-            SELECT
-                alumno_id,
-                SUM(' . $haberExpr . ') AS haber_total
-            FROM pago_registrado
-            ' . $wherePagos . '
-            GROUP BY alumno_id
-        ) h ON h.alumno_id = a.id
-        SET a.saldo_cc = ROUND(COALESCE(d.debe_total, 0) + ' . $exprAjuste . ' - COALESCE(h.haber_total, 0), 2)
-    ';
+    $stUpd = $pdo->prepare('UPDATE alumnos SET saldo_cc = ROUND(?, 2) WHERE id = ?');
 
     if ($alumnoId !== null && $alumnoId > 0) {
-        $sql .= ' WHERE a.id = ?';
-        $st = $pdo->prepare($sql);
-        $params[] = $alumnoId;
-        $st->execute($params);
-        return $st->rowCount();
+        [, $resumen] = cc_build_movimientos($pdo, $alumnoId, 'simple');
+        $stUpd->execute([$resumen['saldo'], $alumnoId]);
+
+        return $stUpd->rowCount();
     }
 
-    $st = $pdo->prepare($sql);
-    $st->execute($params);
-    return $st->rowCount();
+    $ids = $pdo->query('SELECT id FROM alumnos')->fetchAll(\PDO::FETCH_COLUMN);
+    $n = 0;
+    foreach ($ids as $id) {
+        $aid = (int) $id;
+        if ($aid <= 0) {
+            continue;
+        }
+        [, $resumen] = cc_build_movimientos($pdo, $aid, 'simple');
+        $stUpd->execute([$resumen['saldo'], $aid]);
+        $n += $stUpd->rowCount();
+    }
+
+    return $n;
 }
