@@ -1,3 +1,12 @@
 .env
 config/config.php
 /vendor/
+
+# Datos locales / no versionar
+backups/
+*.xlsx
+instituto.sql
+instituto_datos.sql
+instituto_fix.sql
+public/uploads/instituto/*
+!public/uploads/instituto/.gitkeep

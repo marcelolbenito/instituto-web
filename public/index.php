@@ -73,12 +73,15 @@ layout_start($config, 'Inicio');
         <a class="qa-item" href="alumnos.php" title="Alumnos"><span class="qa-icon">👥</span><span class="qa-label">Alumnos</span></a>
         <a class="qa-item" href="cuenta_corriente.php" title="Cuenta corriente"><span class="qa-icon">💳</span><span class="qa-label">Cta Cte</span></a>
         <a class="qa-item" href="registrar_cobro.php" title="Registrar cobro"><span class="qa-icon">💵</span><span class="qa-label">Cobro</span></a>
+        <a class="qa-item" href="ajuste_debe.php" title="Cargar debe manual"><span class="qa-icon">📝</span><span class="qa-label">Debe</span></a>
         <a class="qa-item" href="articulos.php" title="Artículos"><span class="qa-icon">📦</span><span class="qa-label">Artículos</span></a>
         <a class="qa-item" href="conceptos_alumno.php" title="Conceptos"><span class="qa-icon">✅</span><span class="qa-label">Conceptos</span></a>
         <a class="qa-item" href="generar_cuotas.php" title="Cuotas"><span class="qa-icon">🧾</span><span class="qa-label">Cuotas</span></a>
         <a class="qa-item" href="barrios.php" title="Barrios"><span class="qa-icon">📍</span><span class="qa-label">Barrios</span></a>
         <a class="qa-item" href="rubros.php" title="Rubros"><span class="qa-icon">🗂️</span><span class="qa-label">Rubros</span></a>
         <a class="qa-item" href="parametros_cobranza.php" title="Parámetros de cobranza"><span class="qa-icon">⚙️</span><span class="qa-label">Cobranza</span></a>
+        <a class="qa-item" href="formas_pago.php" title="Formas de pago"><span class="qa-icon">💳</span><span class="qa-label">Medios</span></a>
+        <a class="qa-item" href="tarjetas.php" title="Tarjetas"><span class="qa-icon">🏦</span><span class="qa-label">Tarjetas</span></a>
         <a class="qa-item" href="feriados.php" title="Feriados"><span class="qa-icon">📅</span><span class="qa-label">Feriados</span></a>
     </div>
 </section>

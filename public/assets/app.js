@@ -30,7 +30,10 @@
 
     const wrapper = document.createElement("div");
     wrapper.className = "data-table-wrap";
-    table.parentNode.insertBefore(wrapper, table);
+    // Mantener la tabla dentro de [data-print-report] (cuenta corriente, etc.)
+    const printReportHost = table.closest("[data-print-report]");
+    const mountParent = printReportHost || table.parentNode;
+    mountParent.insertBefore(wrapper, table);
     wrapper.appendChild(table);
 
     const controls = document.createElement("div");
@@ -166,9 +169,32 @@
       const rows = getProcessedRows();
       const cols = getExportColumns();
       const headHtml = `<tr>${cols.map((c) => `<th>${c.th.textContent.trim()}</th>`).join("")}</tr>`;
-      const bodyHtml = rows.map((row) =>
-        `<tr>${cols.map((c) => `<td>${(row.cells[c.index]?.textContent || "").trim()}</td>`).join("")}</tr>`
-      ).join("");
+      const bodyHtml = rows
+        .map(
+          (row) =>
+            `<tr>${cols
+              .map((c) => `<td>${(row.cells[c.index]?.textContent || "").trim()}</td>`)
+              .join("")}</tr>`
+        )
+        .join("");
+
+      const report =
+        table.closest("[data-print-report]") ||
+        table.closest(".data-table-wrap")?.closest("[data-print-report]") ||
+        (table.dataset.printReportId
+          ? document.getElementById(table.dataset.printReportId)
+          : null) ||
+        document.getElementById("cc-reporte");
+      const headerHtml = report?.querySelector(".cc-reporte-encabezado")?.innerHTML || "";
+      const docTitle =
+        report?.dataset.printTitle ||
+        document.querySelector("h1")?.textContent?.trim() ||
+        "Impresión";
+      const cssHref =
+        document.querySelector('link[href*="app.css"]')?.getAttribute("href") || "assets/app.css";
+      const movimientosTitulo =
+        report?.querySelector("h2")?.textContent?.trim() || "Movimientos";
+
       const w = window.open("", "_blank");
       if (!w) return;
       w.document.write(`
@@ -176,16 +202,43 @@
         <html lang="es">
         <head>
           <meta charset="utf-8">
-          <title>Impresión</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>${docTitle.replace(/</g, "&lt;")}</title>
+          <link rel="stylesheet" href="${cssHref}">
           <style>
-            body{font-family:Arial,sans-serif;padding:14px;}
-            table{width:100%;border-collapse:collapse;}
-            th,td{border:1px solid #ccc;padding:6px 8px;font-size:12px;text-align:left;}
-            th{background:#f2f2f2;}
+            body.cc-print-body {
+              font-family: system-ui, "Segoe UI", Arial, sans-serif;
+              margin: 0;
+              padding: 12mm 10mm;
+              color: #111;
+              background: #fff;
+            }
+            .cc-print-document .cc-print-nota { font-size: 0.8rem; margin-top: 0.75rem; }
+            .cc-print-document .cc-reporte-movimientos-titulo {
+              margin: 1rem 0 0.5rem;
+              font-size: 1rem;
+              color: #123a73;
+            }
+            .cc-print-document .table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            .cc-print-document .table th,
+            .cc-print-document .table td {
+              border: 1px solid #888;
+              padding: 5px 7px;
+            }
+            .cc-print-document .table th { background: #eef3fa; }
+            .cc-print-document .table .num,
+            .cc-print-resumen .num { text-align: right; }
+            @media print {
+              body.cc-print-body { padding: 8mm; }
+            }
           </style>
         </head>
-        <body>
-          <table><thead>${headHtml}</thead><tbody>${bodyHtml}</tbody></table>
+        <body class="cc-print-body">
+          <div class="cc-print-document">
+            ${headerHtml}
+            <h3 class="cc-reporte-movimientos-titulo">${movimientosTitulo.replace(/</g, "&lt;")}</h3>
+            <table class="table"><thead>${headHtml}</thead><tbody>${bodyHtml}</tbody></table>
+          </div>
         </body>
         </html>
       `);

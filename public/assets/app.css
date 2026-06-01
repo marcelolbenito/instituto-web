@@ -40,6 +40,9 @@ body {
 .nav-main {
   gap: 0.45rem;
 }
+.nav-main-short {
+  align-items: center;
+}
 .nav-item {
   display: inline-flex;
   align-items: center;
@@ -50,6 +53,14 @@ body {
   background: #fff;
   text-decoration: none !important;
   color: #2a3646 !important;
+}
+.nav-main-btn {
+  font: inherit;
+  cursor: pointer;
+}
+.nav-main-btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
 }
 .nav-item:hover {
   border-color: var(--brand);
@@ -360,6 +371,11 @@ code {
   cursor: not-allowed;
   pointer-events: none;
 }
+button.action-icon,
+button.action-icon-btn {
+  padding: 0;
+  font-family: inherit;
+}
 .action-icon.danger {
   color: #b00020;
 }
@@ -453,6 +469,37 @@ code {
   border-radius: 10px;
   padding: 0;
 }
+.app-menu-modal {
+  width: min(760px, 94vw);
+}
+.menu-modal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.6rem;
+}
+.menu-modal-item {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  text-decoration: none;
+  color: #1f2f44;
+  padding: 0.55rem 0.65rem;
+}
+.menu-modal-item:hover {
+  border-color: var(--brand);
+  background: #f4f9ff;
+}
+.menu-modal-icon {
+  font-size: 1rem;
+}
+.menu-modal-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
 .app-modal::backdrop {
   background: rgba(0, 0, 0, 0.35);
 }
@@ -527,4 +574,503 @@ button.link {
 }
 .check-row input {
   margin-top: 0.2rem;
+}
+
+/* Registrar cobro: jerarquía visual menos monocromática */
+.cobro-title {
+  color: #123a73;
+  letter-spacing: 0.2px;
+}
+.cobro-card {
+  border-width: 1px;
+  box-shadow: 0 2px 8px rgba(19, 46, 90, 0.05);
+}
+.cobro-card-primary {
+  border-color: #cfe0fb;
+  background: linear-gradient(180deg, #f7fbff 0%, #ffffff 28%);
+}
+.cobro-card-detail {
+  border-color: #d8e8d6;
+  background: linear-gradient(180deg, #f8fff7 0%, #ffffff 28%);
+}
+.cobro-section-title {
+  color: #173a6a;
+  font-size: 1.08rem;
+  border-left: 4px solid #5f8fdb;
+  padding-left: 0.55rem;
+}
+.cobro-items-fieldset {
+  border-color: #b9d3ff;
+  background: #f5f9ff;
+}
+.cobro-btn-primary {
+  background: linear-gradient(180deg, #0b57d0 0%, #0849b0 100%) !important;
+  border-color: #0b57d0 !important;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+/* Caja del día — operación (misma línea visual que inicio / acciones rápidas) */
+.caja-op-card {
+  margin-bottom: 1.1rem;
+}
+.caja-cierre-card {
+  margin-top: 1.5rem;
+  scroll-margin-top: 1rem;
+}
+.caja-op-card h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.caja-op-head {
+  margin-top: 0;
+  margin-bottom: 0.85rem;
+  align-items: flex-start;
+}
+.caja-op-lead {
+  margin: 0.3rem 0 0;
+  font-size: 0.9rem;
+}
+.caja-badge {
+  flex-shrink: 0;
+  padding: 0.28rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.caja-badge--abierta {
+  color: #7a5d00;
+  background: #fff8e6;
+  border: 1px solid #e6d48a;
+}
+.caja-badge--cerrada {
+  color: #1e6b3a;
+  background: #edf9f0;
+  border: 1px solid #a8d5b5;
+}
+.kpi-estado .caja-estado {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.caja-estado--abierta {
+  background: #fff8e6;
+  color: #7a5d00;
+  border: 1px solid #e6d48a;
+}
+.caja-estado--cerrada {
+  background: #edf9f0;
+  color: #1e6b3a;
+  border: 1px solid #a8d5b5;
+}
+.caja-quick-actions {
+  margin: 0 0 0.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.qa-item--primary {
+  border-color: var(--brand);
+  background: #f7fbff;
+  box-shadow: inset 0 0 0 1px rgba(11, 87, 208, 0.08);
+}
+.caja-cerrar-block {
+  margin: 0;
+  padding: 0;
+  max-width: none;
+}
+.caja-cierre-card .caja-cerrar-grid {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid #e8c9a8;
+}
+.caja-btn-cerrar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.35rem !important;
+  font: inherit;
+  font-size: 1.02rem !important;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff !important;
+  background: linear-gradient(180deg, #d97706 0%, #b45309 100%) !important;
+  border: 1px solid #92400e !important;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(180, 83, 9, 0.28);
+  cursor: pointer;
+}
+.caja-btn-cerrar:hover {
+  filter: brightness(1.06);
+}
+.caja-btn-cerrar:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 3px rgba(180, 83, 9, 0.22);
+}
+.caja-btn-cerrar-icon {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+.caja-arqueo-titulo {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+.caja-arqueo-help {
+  margin: 0 0 0.65rem;
+  font-size: 0.88rem;
+}
+.caja-arqueo-table {
+  margin-bottom: 0.85rem;
+  font-size: 0.92rem;
+}
+.caja-arqueo-table input.caja-arqueo-input {
+  width: 7.5rem;
+  max-width: 100%;
+  padding: 0.35rem 0.45rem;
+  text-align: right;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+}
+.caja-arqueo-diff--ok {
+  color: #1e6b3a;
+  font-weight: 600;
+}
+.caja-arqueo-diff--warn {
+  color: #b45309;
+  font-weight: 700;
+}
+.caja-arqueo-table tfoot th,
+.caja-arqueo-table tfoot td {
+  border-top: 2px solid var(--border);
+  font-weight: 600;
+}
+.caja-cerrar-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem 1rem;
+  align-items: end;
+}
+.caja-cerrar-grid label {
+  margin: 0;
+}
+.caja-cerrar-grid input[type="text"] {
+  display: block;
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+}
+.caja-cerrar-actions {
+  margin: 0;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .caja-cerrar-grid {
+    grid-template-columns: 1fr;
+  }
+  .caja-cerrar-actions {
+    white-space: normal;
+  }
+  .caja-cerrar-actions button {
+    width: 100%;
+  }
+}
+
+.app-modal-wide .app-modal-content {
+  max-width: min(42rem, 96vw);
+}
+.btn-sm {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.88rem;
+}
+.form .hint {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted, #666);
+  margin-top: 0.2rem;
+}
+.cobro-medio-panel {
+  max-width: 40rem;
+  padding: 0.85rem 1rem;
+  margin: 0.75rem 0 1rem;
+  border: 1px solid #cfe0fb;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+.cobro-medio-panel .cobro-medio-resumen.err {
+  color: #b00020;
+}
+.cobro-medio-total {
+  font-size: 1.15rem;
+  color: #123a73;
+}
+
+.recibo-simple {
+  max-width: 42rem;
+  margin-top: 1.5rem;
+}
+.recibo-simple .recibo-alumno {
+  font-size: 1.05rem;
+  margin: 0.25rem 0 0.5rem;
+}
+.recibo-subtitle {
+  font-size: 1rem;
+  margin: 1rem 0 0.5rem;
+  color: #173a6a;
+}
+.recibo-tabla-simple th.num,
+.recibo-tabla-simple td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+.recibo-total-row td {
+  border-top: 2px solid var(--border);
+  padding-top: 0.6rem;
+}
+.recibo-pendiente-box {
+  border-color: #f0c36d;
+  background: #fffbf0;
+}
+.recibo-pendiente-box h3 {
+  color: #8a5a00;
+}
+.recibo-pendiente-list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.recibo-encabezado-impresion {
+  text-align: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 2px solid #173a6a;
+}
+.recibo-titulo-principal {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #123a73;
+}
+.recibo-numero {
+  margin: 0.35rem 0 0;
+  font-size: 1rem;
+  color: #333;
+}
+.recibo-meta {
+  margin: 0.75rem 0 1rem;
+  line-height: 1.55;
+  font-size: 0.95rem;
+}
+
+/* Cuenta corriente — encabezado solo para impresión (popup) */
+.cc-only-print {
+  display: none !important;
+}
+.cc-print-encabezado,
+.cc-reporte-encabezado {
+  border-bottom: 2px solid #1a4a8a;
+  padding-bottom: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+.cc-print-instituto {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #5a6b7d;
+}
+.cc-print-titulo {
+  margin: 0.25rem 0 0.85rem;
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: #123a73;
+  letter-spacing: 0.02em;
+}
+.cc-print-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: 0.55rem 1.5rem;
+  margin: 0;
+}
+.cc-print-meta-grid > div {
+  margin: 0;
+}
+.cc-print-meta-grid dt {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7c8f;
+}
+.cc-print-meta-grid dd {
+  margin: 0.12rem 0 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: #1a2a3a;
+}
+.cc-print-resumen {
+  margin-top: 0.9rem;
+  width: 100%;
+  max-width: 22rem;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.cc-print-resumen th,
+.cc-print-resumen td {
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #c5d4e8;
+  text-align: left;
+}
+.cc-print-resumen th {
+  background: #f4f8fd;
+  font-weight: 600;
+  width: 42%;
+}
+.cc-print-resumen .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cc-print-nota {
+  margin: 0.65rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+/* Impresión: solo el bloque #recibo (registrar_cobro.php?pago_id=…) */
+@media print {
+  body:has(#recibo) * {
+    visibility: hidden;
+  }
+  body:has(#recibo) #recibo,
+  body:has(#recibo) #recibo * {
+    visibility: visible;
+  }
+  body:has(#recibo) #recibo .recibo-no-imprimir,
+  body:has(#recibo) #recibo .recibo-no-imprimir * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+  body:has(#recibo) #recibo {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 12mm 10mm;
+    border: 1px solid #000;
+    box-shadow: none;
+    background: #fff;
+    color: #000;
+  }
+  body:has(#recibo) #recibo .recibo-titulo-principal,
+  body:has(#recibo) #recibo .recibo-numero,
+  body:has(#recibo) #recibo .recibo-alumno,
+  body:has(#recibo) #recibo .recibo-subtitle {
+    color: #000;
+  }
+  body:has(#recibo) #recibo .muted {
+    color: #333;
+  }
+  body:has(#recibo) #recibo .table {
+    border-collapse: collapse;
+  }
+  body:has(#recibo) #recibo .table th,
+  body:has(#recibo) #recibo .table td {
+    border: 1px solid #666;
+    padding: 0.35rem 0.5rem;
+  }
+  body:has(#recibo) .data-table-wrap,
+  body:has(#recibo) .data-table-controls,
+  body:has(#recibo) .data-table-footer {
+    display: none !important;
+  }
+}
+
+.help-box {
+  margin: 1rem 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #cfe0fb;
+  border-radius: 8px;
+  background: #f7fbff;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.help-box h3 {
+  margin: 0 0 0.45rem;
+  font-size: 1rem;
+  color: #173a6a;
+}
+.help-box ul {
+  margin: 0.35rem 0 0.5rem 1.15rem;
+  padding: 0;
+}
+.help-box li {
+  margin: 0.25rem 0;
+}
+.help-box .help-example {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px dashed #b9d3ff;
+  font-size: 0.9em;
+}
+
+/* Alumnos — filtro regularidad */
+.reg-checks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.35rem 1rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border, #dde3ea);
+  border-radius: 6px;
+  background: #fafbfc;
+}
+.reg-checks-grid.is-muted {
+  opacity: 0.55;
+}
+
+/* Logo instituto — pantalla parámetros e impresiones */
+.instituto-logo-preview {
+  max-height: 80px;
+  max-width: 240px;
+  object-fit: contain;
+  display: block;
+  margin: 0.5rem 0;
+}
+.instituto-logo-wrap {
+  margin-bottom: 0.5rem;
+}
+.instituto-logo-print {
+  max-height: 72px;
+  max-width: 220px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.instituto-logo-fe {
+  margin: 0 auto 0.75rem;
+}
+.recibo-encabezado-impresion .instituto-logo-wrap {
+  text-align: center;
+  margin-bottom: 0.35rem;
+}
+@media print {
+  .instituto-logo-print {
+    max-height: 64px;
+    max-width: 200px;
+  }
 }

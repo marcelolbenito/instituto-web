@@ -24,6 +24,15 @@ if ($host !== false && $host !== '') {
             'user' => $dbUser,
             'pass' => $dbPass,
         ],
+        'gesis' => [
+            'base_url' => getenv('GESIS_FE_URL') ?: 'https://servicios.gesis2.com',
+            'email' => getenv('GESIS_FE_EMAIL') ?: '',
+            'password' => getenv('GESIS_FE_PASSWORD') ?: '',
+            'production' => getenv('GESIS_FE_PRODUCTION') === 'true',
+            'punto_venta' => (int) (getenv('GESIS_FE_PTO_VTA') ?: 1),
+            'cbte_tipo' => (int) (getenv('GESIS_FE_CBTE_TIPO') ?: 11),
+            'concepto' => 2,
+        ],
     ];
 }
 

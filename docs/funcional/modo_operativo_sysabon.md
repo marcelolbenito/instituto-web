@@ -1,3 +1,4 @@
+si
 # Modo operativo actual de SYSTABON (vista funcional)
 
 ## Objetivo de este documento

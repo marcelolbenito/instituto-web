@@ -4,6 +4,91 @@ Objetivo: tener una bitacora corta y accionable para continuar de un dia al otro
 
 ## Registro diario
 
+### Dia 3 - Retoma (migraciones 21/22 + cobro con items)
+
+Fecha: 27/05/2026
+Responsable: Marcelo
+Ambiente: Local (Docker o MySQL local)
+
+**Mapa rapido (si hace rato no miras el proyecto):**
+
+- Carpeta del producto nuevo: `instituto-web/` (PHP + MariaDB).
+- App web: `http://localhost:8080` (si usas Docker).
+- phpMyAdmin: `http://localhost:8081`.
+- Lo que ya estaba hecho: migracion Fox -> alumnos, articulos, cuotas, pagos, cuenta corriente con corte `SALDO_CORTE_DESDE`.
+- Lo que se estaba terminando (sin commit): tipo alumno regular/postgrado + cobro con items extra en recibo + contramovimiento en CC.
+
+**Orden sugerido hoy (no saltear pasos):**
+
+1. Levantar entorno: `docker compose up -d` desde `instituto-web`.
+2. Ejecutar SQL `21` y luego `22` (phpMyAdmin o consola).
+3. Abrir app: Inicio -> Alumnos / Parametros cobranza / Registrar cobro.
+4. Marcar casos de abajo y anotar evidencia (ID alumno o nombre).
+
+### 1) Estado general del dia
+
+- [x] Objetivo del dia: validar migraciones 21/22 y flujo de cobro ampliado.
+- [x] Entorno levantado y BD responde (dashboard Inicio muestra numeros, no error de conexion).
+- [x] Migracion 21 ejecutada sin error.
+- [x] Migracion 22 ejecutada sin error.
+- [x] Purge pagos Fox (`23_purge_pagos_legacy_fox.sql`) + import Excel regulares.
+- [x] Backup previo: `backups/backup_antes_excel_20260527_163433.sql`
+
+Notas:
+- Import 236 OK / 11 errores (DNI o sin conceptos). Activos en BD: 236.
+
+### 2) Validacion tecnica BD (post-migracion)
+
+- [ ] `alumnos.tipo_alumno` existe.
+- [ ] `parametros_cobranza.postgrado_mes_desde` y `postgrado_mes_hasta` existen.
+- [ ] Tabla `pago_item_articulo` existe.
+- [ ] Tabla `cc_ajuste_debe` existe.
+
+Evidencia (captura o resultado SHOW TABLES):
+- 
+
+### 3) Validacion funcional en app
+
+#### Parametros y alumnos
+- [ ] En `parametros_cobranza.php` se ven meses postgrado (abr-nov por defecto).
+- [ ] En `alumnos.php` se puede elegir tipo Regular / Postgrado.
+
+#### Generar cuotas
+- [ ] Alumno **regular**: genera cuota en mes de prueba.
+- [ ] Alumno **postgrado**: NO genera fuera de rango; SI genera dentro del rango.
+
+Evidencia (alumno + mes probado):
+- 
+
+#### Registrar cobro / recibo
+- [ ] Caso A: cobro solo cuota(s) — OK.
+- [ ] Caso B: cobro solo item extra (sin cuota) — OK.
+- [ ] Caso C: cobro mixto cuota + item — OK.
+- [ ] Caso D: en `cuenta_corriente.php` aparece movimiento de ajuste debe por item.
+
+Evidencia (pago_id o alumno):
+- 
+
+### 4) Bloqueos y decisiones
+
+Bloqueos detectados:
+- 
+
+Decisiones pendientes de negocio (anotar acuerdo):
+- [ ] Anulacion de recibo: ¿revierte automaticamente `cc_ajuste_debe`?
+- [ ] Punto de venta en cobro: ¿solo informativo o va a factura electronica?
+- [ ] Items extra: ¿seguimos excluyendo ABONO/BECA por nombre o flag en articulo?
+
+### 5) Cierre del dia
+
+- [ ] Resumen en 3 lineas.
+- [ ] Proximo paso concreto definido.
+
+Resumen del dia:
+- 
+
+---
+
 ### Dia 2 - Cierre de hito migracion base (clientes, articulos y pagos)
 
 Fecha: 15/04/2026
