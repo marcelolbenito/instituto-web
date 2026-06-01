@@ -20,4 +20,6 @@ return [
         'user' => $user,
         'pass' => $pass,
     ],
+    // Factura electrónica: preferir pantalla parametros_factura_electronica.php (tabla BD).
+    // 'gesis' => [ 'email' => '', 'password' => '', ... ],
 ];

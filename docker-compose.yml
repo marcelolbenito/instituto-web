@@ -39,6 +39,12 @@ services:
       DB_USER: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       SALDO_CORTE_DESDE: ${SALDO_CORTE_DESDE}
+      GESIS_FE_URL: ${GESIS_FE_URL:-https://servicios.gesis2.com}
+      GESIS_FE_EMAIL: ${GESIS_FE_EMAIL:-}
+      GESIS_FE_PASSWORD: ${GESIS_FE_PASSWORD:-}
+      GESIS_FE_PRODUCTION: ${GESIS_FE_PRODUCTION:-false}
+      GESIS_FE_PTO_VTA: ${GESIS_FE_PTO_VTA:-1}
+      GESIS_FE_CBTE_TIPO: ${GESIS_FE_CBTE_TIPO:-11}
     depends_on:
       db:
         condition: service_healthy
