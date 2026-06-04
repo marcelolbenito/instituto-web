@@ -2,12 +2,12 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Caja.php';
 require_once dirname(__DIR__) . '/src/InstitutoLogo.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $fecha = trim((string) ($_GET['fecha'] ?? ''));
 $cierre = caja_cierre_schema_ok($pdo) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha) === 1
     ? caja_obtener_cierre($pdo, $fecha)

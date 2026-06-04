@@ -6,13 +6,13 @@ declare(strict_types=1);
  * Importe = suma de importe_referencia de los artículos asignados al alumno (alumno_articulo).
  */
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/Saldos.php';
 require_once dirname(__DIR__) . '/src/Cobranza.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $hasTipoAlumno = db_has_column($pdo, 'alumnos', 'tipo_alumno');
 $hasRangoPostgrado = db_has_column($pdo, 'parametros_cobranza', 'postgrado_mes_desde')
     && db_has_column($pdo, 'parametros_cobranza', 'postgrado_mes_hasta');

@@ -2,14 +2,14 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/FacturaElectronica.php';
 require_once dirname(__DIR__) . '/src/ParametrosFe.php';
 require_once dirname(__DIR__) . '/src/ReciboHtml.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $feOk = fe_schema_ok($pdo);
 $gesisCfg = fe_gesis_config($config, $pdo);
 $gesisListo = (new GesisArcaClient($gesisCfg))->isConfigured();

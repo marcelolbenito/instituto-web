@@ -97,10 +97,12 @@ CREATE TABLE IF NOT EXISTS usuarios (
   id SMALLINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   login VARCHAR(64) NOT NULL,
   hash_password VARCHAR(255) NOT NULL,
-  rol ENUM('admin','caja','consulta') NOT NULL DEFAULT 'consulta',
+  rol ENUM('admin','secretaria','consulta','alumno') NOT NULL DEFAULT 'consulta',
+  alumno_id INT UNSIGNED NULL,
   activo TINYINT(1) NOT NULL DEFAULT 1,
   creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_usuarios_login (login)
+  UNIQUE KEY uq_usuarios_login (login),
+  KEY idx_usuarios_alumno (alumno_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

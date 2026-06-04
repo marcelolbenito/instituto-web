@@ -2,13 +2,13 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/ParametrosFe.php';
 require_once dirname(__DIR__) . '/src/InstitutoLogo.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $tablaOk = fe_parametros_tabla_ok($pdo);
 $emisorOk = $tablaOk && fe_emisor_tabla_extendida_ok($pdo);
 $logoOk = $tablaOk && instituto_logo_tabla_ok($pdo);

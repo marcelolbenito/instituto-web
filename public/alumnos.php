@@ -2,12 +2,13 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
+require_once dirname(__DIR__) . '/src/Auth.php';
 require_once dirname(__DIR__) . '/src/Saldos.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $hasTipoAlumno = db_has_column($pdo, 'alumnos', 'tipo_alumno');
 
 try {
@@ -36,6 +37,7 @@ $estados = [
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    auth_require_write();
     $action = $_POST['action'] ?? '';
     if ($action === 'recalc_saldos') {
         recalcular_saldo_alumnos($pdo);

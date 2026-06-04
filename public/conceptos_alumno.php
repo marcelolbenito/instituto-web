@@ -6,11 +6,11 @@ declare(strict_types=1);
  * Flujo: desde Alumnos → enlace "Conceptos" → se elige un alumno y se marcan artículos.
  */
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $alumnoId = isset($_GET['alumno_id']) ? (int) $_GET['alumno_id'] : 0;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {

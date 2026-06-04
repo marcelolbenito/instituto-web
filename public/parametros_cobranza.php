@@ -2,11 +2,11 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 
 $hasDiasHabiles = db_has_column($pdo, 'parametros_cobranza', 'dias_habiles_tope_pronto_pago');
 $hasInteresFijo = db_has_column($pdo, 'parametros_cobranza', 'importe_interes_mora_fijo');

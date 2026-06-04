@@ -6,12 +6,12 @@ declare(strict_types=1);
  * Usa cc_ajuste_debe con pago_id NULL hasta que se cobre en registrar_cobro o se anule.
  */
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/Saldos.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $hasTabla = db_has_column($pdo, 'cc_ajuste_debe', 'debe');
 
 $alumnoId = isset($_GET['alumno_id']) ? (int) $_GET['alumno_id'] : 0;

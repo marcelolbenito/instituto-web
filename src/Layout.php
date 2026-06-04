@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/Auth.php';
+
 function layout_start(array $config, string $pageTitle = ''): void
 {
     $app = h($config['app']['name']);
@@ -21,10 +23,48 @@ function layout_end(): void
     echo '</main><script src="assets/app.js?v=' . h($jsVer) . '"></script></body></html>';
 }
 
+function layout_render_nav_user_menu(): void
+{
+    $navUser = auth_user();
+    if ($navUser === null) {
+        return;
+    }
+    $nom = auth_display_name();
+    $rol = auth_rol_label((string) ($navUser['rol'] ?? ''));
+
+    echo '<details class="nav-user-menu">';
+    echo '<summary class="nav-user-trigger">';
+    echo '<span class="nav-user-name">' . h($nom) . '</span>';
+    echo '<span class="nav-user-chevron" aria-hidden="true"></span>';
+    echo '</summary>';
+    echo '<div class="nav-user-dropdown">';
+    echo '<p class="nav-user-dropdown-role">' . h($rol) . '</p>';
+    echo '<a class="nav-user-dropdown-item nav-user-dropdown-logout" href="logout.php">Salir</a>';
+    echo '</div>';
+    echo '</details>';
+}
+
 function nav_main(): void
 {
     $current = basename((string) ($_SERVER['SCRIPT_NAME'] ?? 'index.php'));
-    echo '<header class="site-header"><div class="brand"><a href="index.php">Instituto</a></div><nav class="nav nav-main nav-main-short">';
+    echo '<header class="site-header"><div class="brand"><a href="' . h(auth_is_alumno() ? 'portal_alumno.php' : 'index.php') . '">Instituto</a></div><nav class="nav nav-main nav-main-short">';
+
+    if (auth_is_alumno()) {
+        $navUser = auth_user();
+        $isPortal = $current === 'portal_alumno.php';
+        $isCc = $current === 'cuenta_corriente.php';
+        $btnClass = static function (bool $isActive): string {
+            return 'nav-item nav-main-btn' . ($isActive ? ' is-active' : '');
+        };
+        echo '<a class="' . h($btnClass($isPortal)) . '" href="portal_alumno.php"><span class="nav-item-icon">🏠</span><span class="nav-item-label">Mi cuenta</span></a>';
+        echo '<a class="' . h($btnClass($isCc)) . '" href="cuenta_corriente.php?alumno_id=' . auth_alumno_id() . '"><span class="nav-item-icon">💳</span><span class="nav-item-label">Cta. cte.</span></a>';
+        if ($navUser !== null) {
+            layout_render_nav_user_menu();
+        }
+        echo '</nav></header>';
+
+        return;
+    }
 
     $archivos = [
         ['alumnos.php', 'Clientes / alumnos', '👥'],
@@ -36,15 +76,20 @@ function nav_main(): void
     ];
     $comprobantes = [
         ['registrar_cobro.php', 'Recibos / Cobros', '💵'],
-        ['factura_electronica.php', 'Factura electrónica', '🧾'],
+        ['informes_recibos.php', 'Resumen de recibos', '📋'],
+        ['anular_recibo.php', 'Anular recibo', '↩️'],
+        ['factura_electronica.php', 'Factura electrónica por recibo', '🧾'],
         ['caja.php', 'Caja del día', '🏧'],
-        ['caja_cierres.php', 'Cierres de caja', '📒'],
+        ['caja_cierres.php', 'Historial de cierres', '📒'],
         ['ajuste_debe.php', 'Cargar debe manual', '📝'],
         ['generar_cuotas.php', 'Generación de abonos', '🧾'],
     ];
     $informes = [
-        ['cuenta_corriente.php', 'Resumen de saldos', '📊'],
+        ['informes_saldos.php', 'Saldo general', '📊'],
+        ['informes_morosos.php', 'Morosos', '⚠️'],
+        ['informes_recibos.php', 'Resumen de recibos', '🧾'],
         ['alumnos.php', 'Listado de clientes', '📋'],
+        ['cuenta_corriente.php', 'Cuenta corriente', '💳'],
     ];
     $utilitarios = [
         ['parametros_cobranza.php', 'Porcentajes / cobranza', '⚙️'],
@@ -53,6 +98,11 @@ function nav_main(): void
         ['tarjetas.php', 'Tarjetas y cuotas', '🏦'],
         ['feriados.php', 'Calendario de feriados', '📅'],
     ];
+    $navUser = auth_user();
+    $isAdmin = $navUser !== null && ($navUser['rol'] ?? '') === 'admin';
+    if ($isAdmin) {
+        $utilitarios[] = ['reparar_cc_incrementos.php', 'Reparar CC (contramovimientos)', '🔧'];
+    }
 
     $isActiveGroup = static function (array $items, string $currentPath): bool {
         foreach ($items as $item) {
@@ -72,6 +122,16 @@ function nav_main(): void
     echo '<button type="button" class="' . h($btnClass($isActiveGroup($comprobantes, $current))) . '" data-open-modal="menu-comprobantes"><span class="nav-item-icon">🧾</span><span class="nav-item-label">Comprobantes</span></button>';
     echo '<button type="button" class="' . h($btnClass($isActiveGroup($informes, $current))) . '" data-open-modal="menu-informes"><span class="nav-item-icon">📊</span><span class="nav-item-label">Informes</span></button>';
     echo '<button type="button" class="' . h($btnClass($isActiveGroup($utilitarios, $current))) . '" data-open-modal="menu-utilitarios"><span class="nav-item-icon">⚙️</span><span class="nav-item-label">Utilitarios</span></button>';
+    if ($isAdmin) {
+        $isUsuarios = $current === 'usuarios.php';
+        echo '<a class="' . h($btnClass($isUsuarios)) . '" href="usuarios.php" title="Usuarios del sistema">';
+        echo '<span class="nav-item-icon">👤</span><span class="nav-item-label">Usuarios</span></a>';
+    }
+
+    if ($navUser !== null) {
+        layout_render_nav_user_menu();
+    }
+
     echo '</nav></header>';
 
     $renderModal = static function (string $id, string $title, array $items): void {

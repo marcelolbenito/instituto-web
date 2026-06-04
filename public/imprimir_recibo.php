@@ -2,11 +2,11 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/ReciboHtml.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $hasFormasPago = formas_pago_schema_ok($pdo);
 
 $pagoId = isset($_GET['pago_id']) ? (int) $_GET['pago_id'] : 0;
