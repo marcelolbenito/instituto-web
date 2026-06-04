@@ -2,12 +2,12 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/Caja.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $cajaOk = caja_schema_ok($pdo);
 $tienePagoId = caja_tiene_pago_id($pdo);
 
@@ -22,7 +22,7 @@ $msgErr = isset($_GET['err']) ? (string) $_GET['err'] : '';
 if ($cajaOk && isset($_GET['sync'])) {
     $n = caja_sincronizar_cobros_fecha($pdo, $fecha);
     header('Location: caja.php?fecha=' . rawurlencode($fecha) . '&ok=' . rawurlencode(
-        $n > 0 ? "Sincronización: {$n} cobro(s) agregado(s)." : 'No había cobros pendientes de incorporar a caja.'
+        $n > 0 ? "Se incorporaron {$n} cobro(s) a la lista de caja." : 'No había cobros del día sin movimiento en caja.'
     ));
     exit;
 }
@@ -117,7 +117,7 @@ echo '<p class="muted" style="margin:0.35rem 0 0">';
 echo '<a href="caja.php?fecha=' . h($fechaAnt) . '">← Día anterior</a> · ';
 echo '<a href="caja.php?fecha=' . h(date('Y-m-d')) . '">Hoy</a> · ';
 echo '<a href="caja.php?fecha=' . h($fechaSig) . '">Día siguiente →</a> · ';
-echo '<a href="caja.php?fecha=' . h($fecha) . '&sync=1">Sincronizar cobros de esta fecha</a>';
+echo '<a href="caja.php?fecha=' . h($fecha) . '&sync=1" title="Solo si un cobro ya registrado no aparece abajo">Incorporar cobros faltantes</a>';
 echo '</p></form>';
 
 echo '<section class="dashboard-grid">';
@@ -144,8 +144,8 @@ if ($estaCerrada && $cierreDia !== null) {
     echo '<p class="muted caja-op-lead">Cerrada el ' . h($txtCierre) . ' · saldo al cierre $ '
         . number_format((float) $cierreDia['saldo'], 2, ',', '.') . '</p>';
 } else {
-    echo '<p class="muted caja-op-lead">Cobros con fecha de recibo <strong>' . h($fechaTxt)
-        . '</strong>. Al finalizar, arqueo y cierre al pie de la página.</p>';
+    echo '<p class="muted caja-op-lead">Los cobros que registrás impactan esta caja al instante (fecha recibo <strong>'
+        . h($fechaTxt) . '</strong>). Al finalizar, arqueo y cierre al pie de la página.</p>';
 }
 echo '</div>';
 echo '<span class="caja-badge ' . ($estaCerrada ? 'caja-badge--cerrada' : 'caja-badge--abierta') . '">'
@@ -164,16 +164,18 @@ if ($estaCerrada && $cierreDia !== null) {
     echo '<a class="qa-item" href="imprimir_caja_cierre.php?fecha=' . h($fecha) . '" target="_blank" rel="noopener">';
     echo '<span class="qa-icon">🖨️</span><span class="qa-label">Imprimir cierre</span></a>';
     echo '<a class="qa-item" href="caja_cierres.php"><span class="qa-icon">📒</span><span class="qa-label">Historial</span></a>';
-    echo '<a class="qa-item" href="caja.php?fecha=' . h($fecha) . '&sync=1"><span class="qa-icon">↻</span><span class="qa-label">Sincronizar</span></a>';
     echo '</div>';
+    echo '<p class="muted caja-op-extra"><a href="caja.php?fecha=' . h($fecha) . '&sync=1">Incorporar cobros faltantes</a>'
+        . ' <span class="caja-op-extra-hint">(solo si un recibo no figura en movimientos)</span></p>';
 } else {
     echo '<div class="quick-actions caja-quick-actions">';
     echo '<a class="qa-item qa-item--primary" href="registrar_cobro.php?desde_caja_fecha=' . h($fecha) . '">';
     echo '<span class="qa-icon">💵</span><span class="qa-label">Registrar cobro</span></a>';
-    echo '<a class="qa-item" href="caja.php?fecha=' . h($fecha) . '&sync=1">';
-    echo '<span class="qa-icon">↻</span><span class="qa-label">Sincronizar cobros</span></a>';
-    echo '<a class="qa-item" href="caja_cierres.php"><span class="qa-icon">📒</span><span class="qa-label">Historial</span></a>';
+    echo '<a class="qa-item" href="caja_cierres.php"><span class="qa-icon">📒</span><span class="qa-label">Historial de cierres</span></a>';
     echo '</div>';
+    echo '<p class="muted caja-op-extra">¿Cobraste y no aparece abajo? '
+        . '<a href="caja.php?fecha=' . h($fecha) . '&sync=1">Incorporar cobros faltantes de este día</a>'
+        . ' <span class="caja-op-extra-hint">(no reemplaza registrar un cobro nuevo)</span></p>';
 }
 
 echo '</section>';
@@ -196,11 +198,18 @@ if (count($movimientos) === 0) {
         $pid = isset($m['pago_id']) ? (int) $m['pago_id'] : 0;
         $aid = (int) ($m['alumno_id_link'] ?? 0);
         $alNom = trim((string) ($m['alumno_nombre'] ?? ''));
-        echo '<tr>';
+        $recAnulado = trim((string) ($m['anulado_en'] ?? '')) !== ''
+            && ($m['tipo'] ?? '') === 'ingreso'
+            && (int) ($m['pago_id'] ?? 0) > 0;
+        echo '<tr' . ($recAnulado ? ' class="muted"' : '') . '>';
         echo '<td>' . h($hora) . '</td>';
         echo '<td>' . h($esIng ? 'Ingreso' : 'Egreso') . '</td>';
         echo '<td>' . h((string) ($m['medio'] ?? '')) . '</td>';
-        echo '<td>' . h((string) ($m['observaciones'] ?? '')) . '</td>';
+        echo '<td>' . h(caja_observacion_mostrar((string) ($m['observaciones'] ?? '')));
+        if ($recAnulado) {
+            echo ' <span class="err" title="Recibo anulado: no suma en totales">(anulado)</span>';
+        }
+        echo '</td>';
         echo '<td>' . h($alNom) . '</td>';
         echo '<td class="num">' . ($esIng ? '' : '−') . '$ ' . number_format($imp, 2, ',', '.') . '</td>';
         echo '<td class="nowrap">';

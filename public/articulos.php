@@ -2,11 +2,39 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
+
+/**
+ * @return array{alumnos:int, cobros:int}
+ */
+function articulo_conteo_uso(PDO $pdo, int $articuloId): array
+{
+    $stAl = $pdo->prepare('SELECT COUNT(*) FROM alumno_articulo WHERE articulo_id = ?');
+    $stAl->execute([$articuloId]);
+    $nAl = (int) $stAl->fetchColumn();
+    $nPag = 0;
+    if (db_has_column($pdo, 'pago_item_articulo', 'articulo_id')) {
+        $stPag = $pdo->prepare('SELECT COUNT(*) FROM pago_item_articulo WHERE articulo_id = ?');
+        $stPag->execute([$articuloId]);
+        $nPag = (int) $stPag->fetchColumn();
+    }
+
+    return ['alumnos' => $nAl, 'cobros' => $nPag];
+}
+
+function articulo_se_puede_eliminar(PDO $pdo, int $articuloId): bool
+{
+    if ($articuloId <= 0) {
+        return false;
+    }
+    $uso = articulo_conteo_uso($pdo, $articuloId);
+
+    return $uso['alumnos'] === 0 && $uso['cobros'] === 0;
+}
 
 try {
     $pdo->query('SELECT rubro_id FROM articulos LIMIT 1');
@@ -59,6 +87,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: articulos.php?ok=1');
         exit;
     }
+    if ($action === 'toggle_activo' && !empty($_POST['id'])) {
+        $id = (int) $_POST['id'];
+        $st = $pdo->prepare('SELECT id, activo, detalle FROM articulos WHERE id = ?');
+        $st->execute([$id]);
+        $art = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$art) {
+            header('Location: articulos.php?err=' . rawurlencode('Artículo inexistente.'));
+            exit;
+        }
+        $nuevoActivo = (int) ($art['activo'] ?? 0) === 1 ? 0 : 1;
+        $pdo->prepare('UPDATE articulos SET activo = ? WHERE id = ?')->execute([$nuevoActivo, $id]);
+        $msg = $nuevoActivo === 1
+            ? 'Artículo reactivado.'
+            : 'Artículo inactivado (no aparece en cobros ni asignación a alumnos).';
+        $uso = articulo_conteo_uso($pdo, $id);
+        if ($nuevoActivo === 0 && ($uso['alumnos'] > 0 || $uso['cobros'] > 0)) {
+            $msg .= ' Sigue referenciado';
+            if ($uso['alumnos'] > 0) {
+                $msg .= ' por ' . $uso['alumnos'] . ' alumno(s)';
+            }
+            if ($uso['cobros'] > 0) {
+                $msg .= ($uso['alumnos'] > 0 ? ' y' : ' por') . ' ' . $uso['cobros'] . ' cobro(s)';
+            }
+            $msg .= ' en historial.';
+        }
+        header('Location: articulos.php?ok=' . rawurlencode($msg));
+        exit;
+    }
+    if ($action === 'delete' && !empty($_POST['id'])) {
+        $id = (int) $_POST['id'];
+        if (!articulo_se_puede_eliminar($pdo, $id)) {
+            header('Location: articulos.php?err=' . rawurlencode(
+                'No se puede eliminar: el artículo está asignado a alumnos o figura en cobros. Inactivelo en su lugar.'
+            ));
+            exit;
+        }
+        $st = $pdo->prepare('DELETE FROM articulos WHERE id = ?');
+        $st->execute([$id]);
+        header('Location: articulos.php?ok=' . rawurlencode('Artículo eliminado.'));
+        exit;
+    }
 }
 
 $edit = null;
@@ -68,22 +137,32 @@ if (isset($_GET['id'])) {
     $edit = $st->fetch();
 }
 
-$rows = $pdo->query(
-    'SELECT a.*, r.nombre AS rubro_nombre FROM articulos a
-     LEFT JOIN rubros r ON r.id = a.rubro_id
-     ORDER BY a.detalle'
-)->fetchAll();
+$filtro = (string) ($_GET['ver'] ?? 'todos');
+if (!in_array($filtro, ['todos', 'activos', 'inactivos'], true)) {
+    $filtro = 'todos';
+}
+$sqlList = 'SELECT a.*, r.nombre AS rubro_nombre FROM articulos a
+     LEFT JOIN rubros r ON r.id = a.rubro_id';
+if ($filtro === 'activos') {
+    $sqlList .= ' WHERE a.activo = 1';
+} elseif ($filtro === 'inactivos') {
+    $sqlList .= ' WHERE a.activo = 0';
+}
+$sqlList .= ' ORDER BY a.activo DESC, a.detalle';
+$rows = $pdo->query($sqlList)->fetchAll();
 
 layout_start($config, 'Artículos');
 if (isset($_GET['ok'])) {
-    flash_ok('Guardado correctamente.');
+    $okMsg = (string) $_GET['ok'];
+    flash_ok($okMsg === '1' ? 'Guardado correctamente.' : $okMsg);
 }
 if (isset($_GET['err'])) {
     flash_err((string) $_GET['err']);
 }
 
 echo '<h1>Artículos / conceptos</h1>';
-echo '<p class="muted">Ficha alineada al modo operativo (Archivos → Artículos). Lista 1 = importe referencia.</p>';
+echo '<p class="muted">Ficha alineada al modo operativo (Archivos → Artículos). Lista 1 = importe referencia. '
+    . 'Los <strong>inactivos</strong> no se ofrecen en cobros ni en conceptos por alumno; el historial de cobros se conserva.</p>';
 
 $row = $edit ?: [];
 
@@ -125,12 +204,43 @@ if ($edit) {
     echo '<span data-auto-open="articulo-modal"></span>';
 }
 
-echo '<h2>Listado</h2><table class="table js-data-table"><thead><tr><th>Id</th><th>Legacy</th><th>Detalle</th><th>Rubro</th><th>Lista 1</th><th>Abono</th><th data-nosort="1"></th></tr></thead><tbody>';
+echo '<h2>Listado</h2>';
+echo '<p class="toolbar" style="margin-bottom:0.75rem">';
+foreach (['todos' => 'Todos', 'activos' => 'Solo activos', 'inactivos' => 'Solo inactivos'] as $k => $lab) {
+    $cls = $filtro === $k ? 'btn-secondary' : 'btn-secondary muted-link';
+    echo '<a class="' . h($cls) . '" style="margin-right:0.35rem" href="articulos.php?ver=' . h($k) . '">' . h($lab) . '</a>';
+}
+echo '</p>';
+echo '<table class="table js-data-table"><thead><tr><th>Id</th><th>Legacy</th><th>Detalle</th><th>Rubro</th><th>Lista 1</th><th>Abono</th><th>Estado</th><th data-nosort="1"></th></tr></thead><tbody>';
 foreach ($rows as $r) {
-    echo '<tr><td>' . (int) $r['id'] . '</td><td>' . h((string) ($r['codigo_legacy'] ?? '')) . '</td><td>' . h($r['detalle']) . '</td>';
+    $id = (int) $r['id'];
+    $activo = (int) ($r['activo'] ?? 0) === 1;
+    $rowClass = $activo ? '' : ' class="muted"';
+    echo '<tr' . $rowClass . '><td>' . $id . '</td><td>' . h((string) ($r['codigo_legacy'] ?? '')) . '</td><td>' . h($r['detalle']) . '</td>';
     echo '<td>' . h($r['rubro_nombre'] ?? '') . '</td><td>' . h((string) $r['importe_referencia']) . '</td>';
     echo '<td>' . ((int) ($r['es_abono'] ?? 1) ? 'Sí' : 'No') . '</td>';
-    echo '<td><span class="action-icons"><a class="action-icon" href="articulos.php?id=' . (int) $r['id'] . '" title="Editar artículo">✏️</a></span></td></tr>';
+    echo '<td>' . ($activo
+        ? '<span class="badge badge-ok">Activo</span>'
+        : '<span class="badge badge-warn">Inactivo</span>') . '</td>';
+    echo '<td class="nowrap"><span class="action-icons">';
+    echo '<a class="action-icon" href="articulos.php?id=' . $id . '" title="Editar artículo">✏️</a>';
+    echo '<form method="post" class="inline">';
+    echo '<input type="hidden" name="action" value="toggle_activo">';
+    echo '<input type="hidden" name="id" value="' . $id . '">';
+    if ($activo) {
+        echo '<button type="submit" class="action-icon" title="Inactivar artículo" onclick="return confirm(\'¿Inactivar este artículo? No se podrá asignar ni cobrar.\');">⏸️</button>';
+    } else {
+        echo '<button type="submit" class="action-icon" title="Reactivar artículo">▶️</button>';
+    }
+    echo '</form>';
+    if (articulo_se_puede_eliminar($pdo, $id)) {
+        echo '<form method="post" class="inline" onsubmit="return confirm(\'¿Eliminar definitivamente este artículo? Solo artículos sin uso.\');">';
+        echo '<input type="hidden" name="action" value="delete">';
+        echo '<input type="hidden" name="id" value="' . $id . '">';
+        echo '<button type="submit" class="action-icon danger" title="Eliminar (sin uso)">🗑️</button>';
+        echo '</form>';
+    }
+    echo '</span></td></tr>';
 }
 echo '</tbody></table>';
 

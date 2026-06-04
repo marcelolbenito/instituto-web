@@ -1,12 +1,12 @@
 /**
- * Paso 3 registrar cobro: recargo/descuento por forma de pago y tarjeta.
+ * Paso 3 registrar cobro: abonos parciales, recargo/descuento por forma de pago.
  */
 (() => {
   const root = document.getElementById("cobro-medio-pago");
   if (!root) return;
 
-  const subtotal = Number(root.dataset.subtotal || "0");
-  const maxDesc = Number(root.dataset.maxDescuento || "0");
+  const itemsTotal = Number(root.dataset.itemsTotal || "0");
+  const maxDescPct = Number(root.dataset.maxDescuentoPct || "100");
   const formas = JSON.parse(root.dataset.formas || "[]");
   const tarjetas = JSON.parse(root.dataset.tarjetas || "[]");
 
@@ -21,6 +21,48 @@
   const inpDesc = root.querySelector('[name="descuento_medio_pct"]');
   const totalEl = root.querySelector(".cobro-medio-total");
   const resumenEl = root.querySelector(".cobro-medio-resumen");
+  const abonoInputs = document.querySelectorAll(".cobro-abono-input");
+
+  /** Importe AR: acepta 94.791,67 (es-AR) o 94791.67 (punto decimal). */
+  function parseMoney(raw) {
+    const s = String(raw || "")
+      .trim()
+      .replace(/\s/g, "");
+    if (s === "") return 0;
+    if (s.includes(",")) {
+      const n = Number(s.replace(/\./g, "").replace(",", "."));
+      return Number.isFinite(n) ? n : 0;
+    }
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function fmt(n) {
+    return n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function subtotalAbonos() {
+    let s = itemsTotal;
+    abonoInputs.forEach((inp) => {
+      s += parseMoney(inp.value);
+    });
+    return Math.round(s * 100) / 100;
+  }
+
+  function actualizarRestos() {
+    abonoInputs.forEach((inp) => {
+      const max = parseMoney(inp.dataset.max || inp.getAttribute("data-max") || "0");
+      const ab = parseMoney(inp.value);
+      const resto = Math.max(0, Math.round((max - ab) * 100) / 100);
+      const tr = inp.closest("tr");
+      const cel = tr ? tr.querySelector(".cobro-abono-resto") : null;
+      if (cel) {
+        cel.textContent = "$ " + fmt(resto);
+        cel.classList.toggle("err", resto > 0.009);
+        cel.classList.toggle("muted", resto <= 0.009);
+      }
+    });
+  }
 
   function formaActual() {
     const id = Number(selForma?.value || 0);
@@ -35,6 +77,7 @@
   }
 
   function calcular() {
+    const subtotal = subtotalAbonos();
     const f = formaActual();
     let recPct = 0;
     let descPct = 0;
@@ -57,10 +100,10 @@
       }
       if (f.permite_descuento_pct && inpDesc) {
         descPct = Math.max(0, Number(inpDesc.value || 0));
-        if (descPct > maxDesc + 0.0001) {
-          msg = "Descuento máximo " + maxDesc.toFixed(2).replace(".", ",") + "%.";
-          descPct = maxDesc;
-          inpDesc.value = String(maxDesc);
+        if (descPct > maxDescPct + 0.0001) {
+          msg = "El descuento en efectivo no puede superar " + maxDescPct.toFixed(0) + "%.";
+          descPct = maxDescPct;
+          inpDesc.value = String(maxDescPct);
         }
       }
     }
@@ -70,22 +113,17 @@
     const total = Math.round((subtotal + recImp - descImp) * 100) / 100;
 
     if (totalEl) {
-      totalEl.textContent =
-        "$ " +
-        total.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      totalEl.textContent = "$ " + fmt(total);
     }
     if (resumenEl) {
-      const parts = ["Subtotal $ " + fmt(subtotal)];
+      const parts = ["Subtotal abonos $ " + fmt(subtotal)];
       if (recImp > 0.00001) parts.push("Recargo medio +" + fmt(recImp) + " (" + recPct.toFixed(2) + "%)");
       if (descImp > 0.00001) parts.push("Descuento −" + fmt(descImp) + " (" + descPct.toFixed(2) + "%)");
       parts.push(msg);
       resumenEl.textContent = parts.filter(Boolean).join(" · ");
       resumenEl.classList.toggle("err", msg !== "");
     }
-  }
-
-  function fmt(n) {
-    return n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    actualizarRestos();
   }
 
   function refrescarCuotas() {
@@ -98,7 +136,8 @@
       t.planes.forEach((pl) => {
         const opt = document.createElement("option");
         opt.value = String(pl.cuotas);
-        opt.textContent = pl.cuotas + " cuota" + (pl.cuotas === 1 ? "" : "s") + " (" + Number(pl.recargo_pct).toFixed(2) + "%)";
+        opt.textContent =
+          pl.cuotas + " cuota" + (pl.cuotas === 1 ? "" : "s") + " (" + Number(pl.recargo_pct).toFixed(2) + "%)";
         selCuotas.appendChild(opt);
       });
     }
@@ -126,8 +165,26 @@
   });
   selCuotas?.addEventListener("change", calcular);
   inpDesc?.addEventListener("input", calcular);
+  abonoInputs.forEach((inp) => {
+    inp.addEventListener("input", calcular);
+    inp.addEventListener("blur", () => {
+      const max = parseMoney(inp.dataset.max || "0");
+      let v = parseMoney(inp.value);
+      if (max > 0 && v > max + 0.009) v = max;
+      if (v < 0) v = 0;
+      if (v > 0) {
+        const parts = v.toFixed(2).split(".");
+        inp.value = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".") + "," + parts[1];
+      } else {
+        inp.value = "";
+      }
+      calcular();
+    });
+  });
   root.querySelectorAll("input").forEach((inp) => {
-    if (inp !== inpDesc) inp.addEventListener("input", calcular);
+    if (inp !== inpDesc && !inp.classList.contains("cobro-abono-input")) {
+      inp.addEventListener("input", calcular);
+    }
   });
 
   toggleCampos();

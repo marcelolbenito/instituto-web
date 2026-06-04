@@ -5,6 +5,7 @@ require_once __DIR__ . '/util.php';
 require_once __DIR__ . '/ReciboHtml.php';
 require_once __DIR__ . '/GesisArcaClient.php';
 require_once __DIR__ . '/ParametrosFe.php';
+require_once __DIR__ . '/PagoAnulacion.php';
 
 function fe_schema_ok(PDO $pdo): bool
 {
@@ -70,6 +71,164 @@ function fe_estado_pago(PDO $pdo, int $pagoId): array
         'numero' => $row['numero'] !== null ? (int) $row['numero'] : null,
         'mensaje' => $row['mensaje_error'] !== null ? (string) $row['mensaje_error'] : null,
     ];
+}
+
+/**
+ * Estados FE de varios recibos (para cuenta corriente).
+ *
+ * @param list<int> $pagoIds
+ * @return array<int, array{estado:string,cae:?string,punto_venta:?int,numero:?int}>
+ */
+function fe_estados_por_pagos(PDO $pdo, array $pagoIds): array
+{
+    $out = [];
+    $ids = array_values(array_unique(array_filter(array_map('intval', $pagoIds), static fn (int $v): bool => $v > 0)));
+    if ($ids === [] || !fe_schema_ok($pdo)) {
+        return $out;
+    }
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = $pdo->prepare(
+        "SELECT pr.id AS pago_id, pr.comprobante_id, c.punto_venta, c.numero, ce.estado AS fe_estado, ce.cae
+         FROM pago_registrado pr
+         LEFT JOIN comprobante c ON c.id = pr.comprobante_id
+         LEFT JOIN comprobante_electronico ce ON ce.comprobante_id = c.id
+         WHERE pr.id IN ($ph)"
+    );
+    $st->execute($ids);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $pid = (int) ($row['pago_id'] ?? 0);
+        if ($pid <= 0) {
+            continue;
+        }
+        $compId = $row['comprobante_id'] !== null ? (int) $row['comprobante_id'] : 0;
+        if ($compId <= 0) {
+            $out[$pid] = ['estado' => 'sin_fe', 'cae' => null, 'punto_venta' => null, 'numero' => null];
+            continue;
+        }
+        $feEst = (string) ($row['fe_estado'] ?? '');
+        if ($feEst === 'autorizado') {
+            $out[$pid] = [
+                'estado' => 'autorizado',
+                'cae' => $row['cae'] !== null ? (string) $row['cae'] : null,
+                'punto_venta' => $row['punto_venta'] !== null ? (int) $row['punto_venta'] : null,
+                'numero' => $row['numero'] !== null ? (int) $row['numero'] : null,
+            ];
+        } else {
+            $out[$pid] = [
+                'estado' => $feEst !== '' ? $feEst : 'pendiente',
+                'cae' => null,
+                'punto_venta' => $row['punto_venta'] !== null ? (int) $row['punto_venta'] : null,
+                'numero' => $row['numero'] !== null ? (int) $row['numero'] : null,
+            ];
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * Modal tras registrar cobro: preguntar si emitir FE o mostrar éxito / reimpresión.
+ *
+ * @param array{auto_open?: bool} $opts
+ */
+function fe_render_modal_post_cobro(PDO $pdo, array $config, int $pagoId, int $alumnoId, array $opts = []): bool
+{
+    if ($pagoId <= 0 || !fe_schema_ok($pdo)) {
+        return false;
+    }
+
+    $datos = recibo_cargar_por_pago($pdo, $pagoId, $alumnoId);
+    if ($datos === null) {
+        return false;
+    }
+
+    $pago = $datos['pago'];
+    if (fe_pago_es_migrado_excel($pdo, $pago)) {
+        return false;
+    }
+
+    $gesisCfg = fe_gesis_config($config, $pdo);
+    $gesisListo = (new GesisArcaClient($gesisCfg))->isConfigured();
+    $estFe = fe_estado_pago($pdo, $pagoId);
+    $importe = (float) ($pago['importe'] ?? 0);
+    $alumnoNom = $datos['alumno'] !== null ? trim((string) ($datos['alumno']['nombre_completo'] ?? '')) : '';
+    $autoOpen = !empty($opts['auto_open']);
+    $modalId = 'modal-fe-post-cobro';
+    $yaEmitida = $estFe['estado'] === 'autorizado';
+
+    echo '<dialog id="' . h($modalId) . '" class="app-modal fe-modal-post-cobro">';
+    echo '<div class="app-modal-content">';
+    echo '<div class="app-modal-head">';
+    if ($yaEmitida) {
+        echo '<h3>Factura electrónica emitida</h3>';
+    } elseif (!$gesisListo) {
+        echo '<h3>Factura electrónica</h3>';
+    } else {
+        echo '<h3>¿Emitir factura electrónica ahora?</h3>';
+    }
+    echo '<button type="button" class="app-modal-close" data-close-modal="' . h($modalId) . '" aria-label="Cerrar">Cerrar</button>';
+    echo '</div>';
+
+    echo '<div class="fe-modal-body">';
+    echo '<p class="fe-modal-resumen">Recibo <strong>Nº ' . $pagoId . '</strong>';
+    if ($alumnoNom !== '') {
+        echo ' · ' . h($alumnoNom);
+    }
+    echo '<br>Importe cobrado: <strong>$ ' . h(number_format($importe, 2, ',', '.')) . '</strong></p>';
+
+    if ($yaEmitida) {
+        echo '<p class="ok">La factura ARCA ya está autorizada';
+        if ($estFe['cae']) {
+            echo ' — CAE <strong>' . h((string) $estFe['cae']) . '</strong>';
+        }
+        if ($estFe['punto_venta'] && $estFe['numero']) {
+            echo ' · comprobante <strong>' . (int) $estFe['punto_venta'] . '-' . (int) $estFe['numero'] . '</strong>';
+        }
+        echo '.</p>';
+        echo '<div class="form-actions fe-modal-actions">';
+        echo '<a class="btn-primary" href="imprimir_factura_electronica.php?pago_id=' . $pagoId
+            . '" target="_blank" rel="noopener">Imprimir factura</a>';
+        echo '<button type="button" class="btn-secondary" data-close-modal="' . h($modalId) . '">Cerrar</button>';
+        echo '</div>';
+    } elseif (!$gesisListo) {
+        echo '<p class="warn">Falta configurar Gesis en '
+            . '<a href="parametros_factura_electronica.php">Utilitarios → Factura electrónica (parámetros)</a>.</p>';
+        echo '<div class="form-actions fe-modal-actions">';
+        echo '<a class="btn-secondary" href="factura_electronica.php?pago_id=' . $pagoId . '">Ir a factura electrónica</a>';
+        echo '<button type="button" class="btn-secondary" data-close-modal="' . h($modalId) . '">Cerrar</button>';
+        echo '</div>';
+    } else {
+        echo '<p class="muted">Podés emitirla ahora o más tarde desde cuenta corriente o factura electrónica.</p>';
+        echo '<form method="post" class="fe-modal-form">';
+        echo '<input type="hidden" name="action" value="emitir_fe">';
+        echo '<input type="hidden" name="pago_id" value="' . $pagoId . '">';
+        echo '<input type="hidden" name="alumno_id" value="' . $alumnoId . '">';
+        if (isset($_GET['fecha_pago']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $_GET['fecha_pago'])) {
+            echo '<input type="hidden" name="fecha_pago" value="' . h((string) $_GET['fecha_pago']) . '">';
+        }
+        $desdeCaja = trim((string) ($_GET['desde_caja_fecha'] ?? ''));
+        if ($desdeCaja !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $desdeCaja)) {
+            echo '<input type="hidden" name="desde_caja_fecha" value="' . h($desdeCaja) . '">';
+        }
+        echo '<div class="form-actions fe-modal-actions">';
+        echo '<button type="submit" class="btn-primary">Sí, emitir ahora</button>';
+        echo '<button type="button" class="btn-secondary" data-close-modal="' . h($modalId) . '">No, después</button>';
+        echo '</div></form>';
+    }
+
+    echo '</div></div></dialog>';
+
+    if ($autoOpen) {
+        echo '<span data-auto-open="' . h($modalId) . '" hidden aria-hidden="true"></span>';
+    }
+
+    return true;
+}
+
+/** @deprecated Use fe_render_modal_post_cobro */
+function fe_render_panel_tras_cobro(PDO $pdo, array $config, int $pagoId, int $alumnoId): void
+{
+    fe_render_modal_post_cobro($pdo, $config, $pagoId, $alumnoId, ['auto_open' => true]);
 }
 
 function fe_pago_ya_facturado(PDO $pdo, int $pagoId): bool
@@ -170,60 +329,18 @@ function fe_lineas_desde_recibo(array $datos): array
 {
     $pago = $datos['pago'];
     $pagoId = (int) ($pago['id'] ?? 0);
+    $filas = cobranza_pago_lineas_detalle_recibo(
+        $pago,
+        $datos['lineas'],
+        $datos['ajustes'],
+        $datos['items']
+    );
     $lineas = [];
-
-    foreach ($datos['lineas'] as $lr) {
-        $per = sprintf('%04d-%02d', (int) $lr['anio'], (int) $lr['mes']);
-        $tot = (float) ($lr['importe_aplicado'] ?? 0);
-        if ($tot < 0.00001) {
-            $tot = (float) ($lr['importe_capital'] ?? 0)
-                + (float) ($lr['importe_recargo'] ?? 0)
-                + (float) ($lr['importe_beca_perdida'] ?? 0)
-                - (float) ($lr['importe_descuento'] ?? 0);
-        }
-        if ($tot > 0.00001) {
-            $lineas[] = ['descripcion' => 'Cuota mensual ' . $per, 'importe_total' => round($tot, 2)];
-        }
-    }
-    foreach ($datos['ajustes'] as $ar) {
-        $tot = (float) ($ar['debe'] ?? 0);
-        if ($tot > 0.00001) {
-            $lineas[] = [
-                'descripcion' => trim((string) ($ar['concepto'] ?? 'Obligación')),
-                'importe_total' => round($tot, 2),
-            ];
-        }
-    }
-    foreach ($datos['items'] as $it) {
-        $tot = (float) ($it['importe_total'] ?? 0);
-        if ($tot > 0.00001) {
-            $lineas[] = [
-                'descripcion' => (string) ($it['descripcion'] ?? 'Ítem'),
-                'importe_total' => round($tot, 2),
-            ];
-        }
-    }
-
-    $recMora = round((float) ($pago['importe_interes'] ?? 0), 2);
-    if ($recMora > 0.00001) {
-        $lineas[] = ['descripcion' => 'Recargo por mora', 'importe_total' => $recMora];
-    }
-    $beca = round((float) ($pago['importe_beca_perdida'] ?? 0), 2);
-    if ($beca > 0.00001) {
-        $lineas[] = ['descripcion' => 'Diferencia BECA', 'importe_total' => $beca];
-    }
-    $descMedio = round((float) ($pago['importe_descuento_medio'] ?? 0), 2);
-    $descTotal = round((float) ($pago['importe_descuento'] ?? 0), 2);
-    $descCuotas = round(max(0, $descTotal - $descMedio), 2);
-    if ($descCuotas > 0.00001) {
-        $lineas[] = ['descripcion' => 'Descuento (pronto pago)', 'importe_total' => -$descCuotas];
-    }
-    $recMedio = round((float) ($pago['importe_recargo_medio'] ?? 0), 2);
-    if ($recMedio > 0.00001) {
-        $lineas[] = ['descripcion' => 'Recargo por forma de pago', 'importe_total' => $recMedio];
-    }
-    if ($descMedio > 0.00001) {
-        $lineas[] = ['descripcion' => 'Descuento en efectivo', 'importe_total' => -$descMedio];
+    foreach ($filas as $fila) {
+        $lineas[] = [
+            'descripcion' => (string) $fila['concepto'],
+            'importe_total' => round((float) $fila['importe'], 2),
+        ];
     }
 
     if (count($lineas) === 0) {
@@ -355,11 +472,13 @@ function fe_armar_voucher_desde_recibo(array $gesisCfg, array $datos, ?int $ptoV
         throw new InvalidArgumentException('El recibo no tiene importe positivo.');
     }
 
-    $fecha = (string) ($pago['fecha_pago'] ?? date('Y-m-d'));
-    $ts = strtotime($fecha) ?: time();
-    $cbteFch = (int) date('Ymd', $ts);
-    $mesIni = (int) date('Ym01', $ts);
-    $mesFin = (int) date('Ymt', $ts);
+    // Período de servicio: mes del cobro. Fecha del comprobante AFIP: día de emisión (hoy).
+    // Usar fecha_pago en CbteFch provoca error 10016 si el recibo es anterior al último autorizado.
+    $fechaPago = (string) ($pago['fecha_pago'] ?? date('Y-m-d'));
+    $tsPago = strtotime($fechaPago) ?: time();
+    $cbteFch = (int) date('Ymd');
+    $mesIni = (int) date('Ym01', $tsPago);
+    $mesFin = (int) date('Ymt', $tsPago);
 
     $doc = fe_doc_receptor_desde_alumno(is_array($alumno) ? $alumno : []);
     $condIva = fe_condicion_iva_receptor_id((string) ($alumno['condicion_iva'] ?? 'consumidor_final'));
@@ -426,6 +545,9 @@ function fe_emitir_desde_pago(PDO $pdo, array $config, int $pagoId, ?int $ptoVta
             'msg' => 'Este recibo no admite emitir factura ARCA desde aquí.',
         ];
     }
+    if (pago_anulacion_schema_ok($pdo) && pago_esta_anulado($datos['pago'])) {
+        return ['ok' => false, 'msg' => 'El recibo está anulado.'];
+    }
 
     $gesisCfg = fe_gesis_config($config, $pdo);
     $client = new GesisArcaClient($gesisCfg);
@@ -460,8 +582,8 @@ function fe_emitir_desde_pago(PDO $pdo, array $config, int $pagoId, ?int $ptoVta
     $total = round((float) ($pago['importe'] ?? 0), 2);
     $letra = fe_letra_desde_cbte_tipo($cbteTipo);
     $fechaPago = (string) ($pago['fecha_pago'] ?? date('Y-m-d'));
-    $fechaEmision = $fechaPago . ' 12:00:00';
-    $caeVto = fe_parse_cae_vencimiento($resp, $fechaPago);
+    $fechaEmision = date('Y-m-d') . ' 12:00:00';
+    $caeVto = fe_parse_cae_vencimiento($resp, date('Y-m-d'));
 
     try {
         $pdo->beginTransaction();

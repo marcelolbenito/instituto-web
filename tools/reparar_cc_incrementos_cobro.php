@@ -2,8 +2,9 @@
 declare(strict_types=1);
 
 /**
- * Crea contramovimientos RECIBO_INC faltantes (mora/beca) y recalcula saldos.
+ * Crea contramovimientos RECIBO_INC / RECIBO_DEC faltantes (mora, beca, descuentos) y recalcula saldos.
  * Uso: php tools/reparar_cc_incrementos_cobro.php [alumno_id]
+ * Web (producción, solo admin): /reparar_cc_incrementos.php
  */
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
 require_once dirname(__DIR__) . '/src/Db.php';

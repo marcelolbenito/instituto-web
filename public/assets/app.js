@@ -309,6 +309,14 @@
       if (!modal || typeof modal.showModal !== "function") return;
       modal.showModal();
     });
+
+    document.addEventListener("click", (ev) => {
+      document.querySelectorAll(".nav-user-menu[open]").forEach((menu) => {
+        if (!menu.contains(ev.target)) {
+          menu.removeAttribute("open");
+        }
+      });
+    });
   });
 })();
 // JS vanilla: formularios, fetch a endpoints PHP, etc.

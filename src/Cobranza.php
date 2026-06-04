@@ -2,12 +2,15 @@
 declare(strict_types=1);
 
 /**
- * N-ésimo día hábil del mes (lun–vie), empezando a contar desde el día 1 del calendario.
- * El día 1 cuenta como intento 1: si cae sábado/domingo, no suma hasta el primer hábil.
+ * N-ésimo día hábil (lun–vie) desde una fecha inclusive.
+ * El día inicial cuenta como intento 1 si es hábil; si no, se avanza hasta el primer hábil.
  */
-function cobranza_fecha_tope_pronto_pago(int $anio, int $mes, int $diasHabiles, array $fechasFeriado = []): DateTimeImmutable
-{
-    $d = new DateTimeImmutable(sprintf('%04d-%02d-01', $anio, $mes));
+function cobranza_fecha_nesimo_dia_habil_desde(
+    DateTimeImmutable $desde,
+    int $diasHabiles,
+    array $fechasFeriado = []
+): DateTimeImmutable {
+    $d = $desde;
     $habiles = 0;
     $feriadosSet = [];
     foreach ($fechasFeriado as $f) {
@@ -25,7 +28,20 @@ function cobranza_fecha_tope_pronto_pago(int $anio, int $mes, int $diasHabiles, 
         }
         $d = $d->modify('+1 day');
     }
+
     return $d;
+}
+
+/**
+ * N-ésimo día hábil del mes del período, contando desde el día 1 del calendario.
+ */
+function cobranza_fecha_tope_pronto_pago(int $anio, int $mes, int $diasHabiles, array $fechasFeriado = []): DateTimeImmutable
+{
+    return cobranza_fecha_nesimo_dia_habil_desde(
+        new DateTimeImmutable(sprintf('%04d-%02d-01', $anio, $mes)),
+        $diasHabiles,
+        $fechasFeriado
+    );
 }
 
 /**
@@ -105,15 +121,35 @@ function cobranza_sql_join_legacy_haber_por_periodo(): string
        AND pl._periodo_ref = CONCAT(cm.anio, \'-\', LPAD(cm.mes, 2, \'0\'))';
 }
 
+/** Tope de descuento % adicional en efectivo al cobrar (no confundir con bonificación pronto pago en ARS). */
+function cobranza_max_descuento_efectivo_pct(): float
+{
+    return 100.0;
+}
+
+/**
+ * JOIN agregado pago_aplica_cuota (capital + descuentos pronto pago). Requiere alias cm.
+ */
+function cobranza_sql_join_pago_aplica_cuota_agregado(): string
+{
+    return ' LEFT JOIN (
+        SELECT cuota_id,
+               SUM(importe_aplicado) AS aplicado,
+               SUM(COALESCE(importe_descuento, 0)) AS descuento_acum
+        FROM pago_aplica_cuota
+        GROUP BY cuota_id
+    ) pa ON pa.cuota_id = cm.id';
+}
+
 /**
  * Expresión SQL: saldo a cobrar. Requiere alias cm, pa (pago_aplica agregado) y pl (haber legacy por período).
- * importe_original > 0 → orig − aplicaciones_app − haber_legacy_mismo_período; si no, saldo en fila.
+ * importe_original > 0 → orig − capital aplicado − descuentos pronto − haber_legacy; si no, saldo en fila.
  */
 function cobranza_sql_expr_saldo_impago(): string
 {
     return '(CASE '
         . 'WHEN COALESCE(cm.importe_original, 0) > 0.00001 THEN '
-        . 'GREATEST(0, cm.importe_original - COALESCE(pa.aplicado, 0) - COALESCE(pl.haber_legacy, 0)) '
+        . 'GREATEST(0, cm.importe_original - COALESCE(pa.aplicado, 0) - COALESCE(pa.descuento_acum, 0) - COALESCE(pl.haber_legacy, 0)) '
         . 'ELSE GREATEST(0, COALESCE(cm.saldo, 0)) END)';
 }
 
@@ -180,11 +216,7 @@ function cobranza_ultimo_periodo_pagado(PDO $pdo, int $alumnoId): ?string
     $sql = '
         SELECT cm.anio, cm.mes
         FROM cuota_mensual cm
-        LEFT JOIN (
-            SELECT cuota_id, SUM(importe_aplicado) AS aplicado
-            FROM pago_aplica_cuota
-            GROUP BY cuota_id
-        ) pa ON pa.cuota_id = cm.id
+        ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
         ' . cobranza_sql_join_legacy_haber_por_periodo() . "
         WHERE cm.alumno_id = ?
           AND cm.anio >= {$anioOp}
@@ -253,6 +285,26 @@ function cobranza_referencia_es_incremento_cobro(string $referencia): bool
     return str_starts_with(trim($referencia), 'RECIBO_INC:');
 }
 
+/** Referencia de bonificación/descuento en recibo (debe negativo en CC; cuadra el haber del pago). */
+function cobranza_referencia_es_descuento_cobro(string $referencia): bool
+{
+    return str_starts_with(trim($referencia), 'RECIBO_DEC:');
+}
+
+/** Debe en CC espejo de un ítem en pago_item_articulo (no duplicar en detalle recibo/FE). */
+function cobranza_referencia_es_espejo_item_recibo(string $referencia): bool
+{
+    return str_starts_with(trim($referencia), 'RECIBO_ITEM:');
+}
+
+/**
+ * @param array<string, mixed> $ajuste Fila cc_ajuste_debe (debe incluir referencia si se filtra).
+ */
+function cobranza_ajuste_es_espejo_item_recibo(array $ajuste): bool
+{
+    return cobranza_referencia_es_espejo_item_recibo((string) ($ajuste['referencia'] ?? ''));
+}
+
 /**
  * Debe en CC por incrementos del recibo (mora, beca fuera de término, recargo por medio).
  * El haber del pago ya incluye estos importes; sin este movimiento el saldo queda negativo.
@@ -297,6 +349,66 @@ function cobranza_registrar_incremento_cc_cobro(
     return true;
 }
 
+/**
+ * Bonificación en CC por descuentos del recibo (pronto pago, descuento por medio).
+ * Debe negativo: reduce la deuda como contrapartida del haber neto del pago.
+ */
+function cobranza_registrar_descuento_cc_cobro(
+    PDO $pdo,
+    int $alumnoId,
+    string $fechaPagoYmd,
+    int $pagoId,
+    string $concepto,
+    float $importe,
+    string $refClave
+): bool {
+    if ($alumnoId <= 0 || $pagoId <= 0 || !db_has_column($pdo, 'cc_ajuste_debe', 'debe')) {
+        return false;
+    }
+    $importe = round(abs($importe), 2);
+    if ($importe < 0.005) {
+        return false;
+    }
+    $concepto = trim($concepto);
+    if ($concepto === '') {
+        return false;
+    }
+    if (mb_strlen($concepto) > 200) {
+        $concepto = mb_substr($concepto, 0, 200);
+    }
+    $clave = preg_replace('/[^A-Za-z0-9_\-]/', '', $refClave) ?? '';
+    if ($clave === '') {
+        $clave = 'X';
+    }
+    $ref = 'RECIBO_DEC:' . $clave . ':' . $pagoId;
+    if (mb_strlen($ref) > 80) {
+        $ref = mb_substr($ref, 0, 80);
+    }
+    $st = $pdo->prepare(
+        'INSERT INTO cc_ajuste_debe (alumno_id, fecha_mov, concepto, debe, referencia, pago_id)
+         VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    $st->execute([$alumnoId, $fechaPagoYmd, $concepto, -$importe, $ref, $pagoId]);
+
+    return true;
+}
+
+function cobranza_existe_descuento_cc_cobro(PDO $pdo, int $pagoId, string $refClave): bool
+{
+    if ($pagoId <= 0 || !db_has_column($pdo, 'cc_ajuste_debe', 'debe')) {
+        return false;
+    }
+    $clave = preg_replace('/[^A-Za-z0-9_\-]/', '', $refClave) ?? '';
+    $ref = 'RECIBO_DEC:' . ($clave !== '' ? $clave : 'X') . ':' . $pagoId;
+    if (mb_strlen($ref) > 80) {
+        $ref = mb_substr($ref, 0, 80);
+    }
+    $st = $pdo->prepare('SELECT id FROM cc_ajuste_debe WHERE referencia = ? LIMIT 1');
+    $st->execute([$ref]);
+
+    return (bool) $st->fetchColumn();
+}
+
 function cobranza_existe_incremento_cc_cobro(PDO $pdo, int $pagoId, string $refClave): bool
 {
     if ($pagoId <= 0 || !db_has_column($pdo, 'cc_ajuste_debe', 'debe')) {
@@ -314,7 +426,7 @@ function cobranza_existe_incremento_cc_cobro(PDO $pdo, int $pagoId, string $refC
 }
 
 /**
- * Repara cobros históricos sin contramovimiento de mora/beca (saldo CC negativo).
+ * Repara cobros históricos sin contramovimiento de mora/beca/descuento (saldo CC desbalanceado).
  *
  * @return array{creados:int,omitidos:int}
  */
@@ -327,11 +439,13 @@ function cobranza_backfill_incrementos_cc_desde_pagos(PDO $pdo, ?int $alumnoId =
     }
 
     $sql = 'SELECT pac.cuota_id, pac.pago_id, pac.importe_recargo, pac.importe_beca_perdida,
+                   pac.importe_descuento,
                    pr.alumno_id, pr.fecha_pago, cm.anio, cm.mes
             FROM pago_aplica_cuota pac
             INNER JOIN pago_registrado pr ON pr.id = pac.pago_id
             INNER JOIN cuota_mensual cm ON cm.id = pac.cuota_id
-            WHERE (COALESCE(pac.importe_recargo, 0) > 0.005 OR COALESCE(pac.importe_beca_perdida, 0) > 0.005)';
+            WHERE (COALESCE(pac.importe_recargo, 0) > 0.005 OR COALESCE(pac.importe_beca_perdida, 0) > 0.005
+                OR COALESCE(pac.importe_descuento, 0) > 0.005)';
     $params = [];
     if ($alumnoId !== null && $alumnoId > 0) {
         $sql .= ' AND pr.alumno_id = ?';
@@ -347,6 +461,7 @@ function cobranza_backfill_incrementos_cc_desde_pagos(PDO $pdo, ?int $alumnoId =
         $cid = (int) $row['cuota_id'];
         $rec = round((float) ($row['importe_recargo'] ?? 0), 2);
         $beca = round((float) ($row['importe_beca_perdida'] ?? 0), 2);
+        $desc = round((float) ($row['importe_descuento'] ?? 0), 2);
         if (cobranza_existe_incremento_cc_cobro($pdo, $pagoId, 'MORA-C' . $cid)) {
             ++$omitidos;
         } elseif (cobranza_registrar_incremento_cc_cobro($pdo, $alId, $fecha, $pagoId, 'Mora/recargo cuota ' . $per, $rec, 'MORA-C' . $cid)) {
@@ -356,6 +471,13 @@ function cobranza_backfill_incrementos_cc_desde_pagos(PDO $pdo, ?int $alumnoId =
             if (cobranza_existe_incremento_cc_cobro($pdo, $pagoId, 'BECA-C' . $cid)) {
                 ++$omitidos;
             } elseif (cobranza_registrar_incremento_cc_cobro($pdo, $alId, $fecha, $pagoId, 'Beca fuera de término ' . $per, $beca, 'BECA-C' . $cid)) {
+                ++$creados;
+            }
+        }
+        if ($desc > 0.005) {
+            if (cobranza_existe_descuento_cc_cobro($pdo, $pagoId, 'DESC-C' . $cid)) {
+                ++$omitidos;
+            } elseif (cobranza_registrar_descuento_cc_cobro($pdo, $alId, $fecha, $pagoId, 'Descuento pronto pago cuota ' . $per, $desc, 'DESC-C' . $cid)) {
                 ++$creados;
             }
         }
@@ -387,6 +509,38 @@ function cobranza_backfill_incrementos_cc_desde_pagos(PDO $pdo, ?int $alumnoId =
                     'Recargo por forma de pago',
                     (float) $pr['importe_recargo_medio'],
                     'MEDIO-R'
+                )) {
+                    ++$creados;
+                }
+            }
+        }
+    }
+
+    if (db_has_column($pdo, 'pago_registrado', 'importe_descuento_medio')) {
+        $sqlDescMed = 'SELECT id, alumno_id, fecha_pago, importe_descuento_medio
+                       FROM pago_registrado
+                       WHERE COALESCE(importe_descuento_medio, 0) > 0.005';
+        if ($alumnoId !== null && $alumnoId > 0) {
+            $stDescMed = $pdo->prepare($sqlDescMed . ' AND alumno_id = ?');
+            $stDescMed->execute([$alumnoId]);
+        } else {
+            $stDescMed = $pdo->query($sqlDescMed);
+        }
+        if ($stDescMed !== false) {
+            foreach ($stDescMed->fetchAll(PDO::FETCH_ASSOC) as $pr) {
+                $pagoId = (int) $pr['id'];
+                if (cobranza_existe_descuento_cc_cobro($pdo, $pagoId, 'MEDIO-D')) {
+                    ++$omitidos;
+                    continue;
+                }
+                if (cobranza_registrar_descuento_cc_cobro(
+                    $pdo,
+                    (int) $pr['alumno_id'],
+                    (string) $pr['fecha_pago'],
+                    $pagoId,
+                    'Descuento por forma de pago',
+                    (float) $pr['importe_descuento_medio'],
+                    'MEDIO-D'
                 )) {
                     ++$creados;
                 }
@@ -434,6 +588,37 @@ function cobranza_alumno_tiene_beca(PDO $pdo, int $alumnoId): bool
     return (int) $st->fetchColumn() === 1;
 }
 
+/** Nombres de artículos BECA activos asignados al alumno (ej. "BECA 25%"). */
+function cobranza_alumno_articulos_beca_label(PDO $pdo, int $alumnoId): string
+{
+    if ($alumnoId <= 0) {
+        return '';
+    }
+    $st = $pdo->prepare(
+        "SELECT GROUP_CONCAT(DISTINCT ar_b.detalle ORDER BY ar_b.detalle SEPARATOR ', ')
+         FROM alumno_articulo aa_b
+         INNER JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
+         WHERE aa_b.alumno_id = ?
+           AND ar_b.activo = 1
+           AND UPPER(ar_b.detalle) LIKE '%BECA%'"
+    );
+    $st->execute([$alumnoId]);
+    $raw = $st->fetchColumn();
+
+    return is_string($raw) ? trim($raw) : '';
+}
+
+/** Subconsulta: detalle de artículos BECA activos del alumno de la fila cuota. */
+function cobranza_sql_select_articulos_beca_detalle(string $alumnoIdSql = 'cm.alumno_id'): string
+{
+    return '(SELECT GROUP_CONCAT(DISTINCT ar_b.detalle ORDER BY ar_b.detalle SEPARATOR \', \')
+        FROM alumno_articulo aa_b
+        INNER JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
+        WHERE aa_b.alumno_id = ' . $alumnoIdSql . '
+          AND ar_b.activo = 1
+          AND UPPER(ar_b.detalle) LIKE \'%BECA%\') AS articulos_beca_detalle';
+}
+
 function cobranza_debe_pendiente_presentacion(array $adj): array
 {
     $ref = trim((string) ($adj['referencia'] ?? ''));
@@ -452,6 +637,14 @@ function cobranza_debe_pendiente_presentacion(array $adj): array
             'etiqueta_tipo' => 'Cargo por recibo',
             'concepto' => $concepto,
             'nota_html' => '<span class="muted" title="Mora, beca o recargo del recibo; cuadra el haber del pago">Incremento cobrado</span>',
+        ];
+    }
+    if (cobranza_referencia_es_descuento_cobro($ref)) {
+        return [
+            'tipo' => 'descuento_recibo',
+            'etiqueta_tipo' => 'Bonificación por recibo',
+            'concepto' => $concepto,
+            'nota_html' => '<span class="muted" title="Descuento pronto pago o por medio; cuadra el haber neto del pago">Bonificación cobrada</span>',
         ];
     }
     if (str_starts_with($ref, 'AJUSTE:manual:')) {
@@ -479,48 +672,304 @@ function cobranza_debe_pendiente_presentacion(array $adj): array
     ];
 }
 
-function cobranza_cuotas_pendientes_alumno(PDO $pdo, int $alumnoId): array
+/**
+ * @return string[] Fechas Y-m-d (feriados nacionales para informes masivos).
+ */
+function cobranza_fechas_feriado_nacionales(PDO $pdo): array
 {
-    if ($alumnoId <= 0) {
+    if (!db_has_column($pdo, 'feriados', 'fecha')) {
         return [];
     }
+    $st = $pdo->query("SELECT fecha FROM feriados WHERE ambito = 'nacional'");
+    if ($st === false) {
+        return [];
+    }
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $f) {
+        $v = trim((string) $f);
+        if ($v !== '') {
+            $out[$v] = true;
+        }
+    }
+
+    return array_keys($out);
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function cobranza_cargar_parametros(PDO $pdo): array
+{
+    $param = $pdo->query('SELECT * FROM parametros_cobranza WHERE id = 1')->fetch(PDO::FETCH_ASSOC);
+    if (!is_array($param)) {
+        $param = [];
+    }
+    $param['fechas_feriado'] = cobranza_fechas_feriado_nacionales($pdo);
+
+    return $param;
+}
+
+/**
+ * Fecha en que se generó la cuota (guardada en fecha_vencimiento al crearla).
+ */
+function cobranza_cuota_fecha_generacion(PDO $pdo, array $cuota): string
+{
+    $fv = trim((string) ($cuota['fecha_vencimiento'] ?? ''));
+    if ($fv !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $fv) === 1) {
+        return $fv;
+    }
+
+    return cobranza_fecha_generacion_cuota($pdo, (int) ($cuota['anio'] ?? 0), (int) ($cuota['mes'] ?? 0));
+}
+
+/**
+ * Último día de pronto pago: N días hábiles desde la fecha de generación de la cuota.
+ */
+function cobranza_cuota_fecha_tope_pronto_desde_generacion(PDO $pdo, array $cuota, array $param): DateTimeImmutable
+{
+    $dias = max(1, (int) ($param['dias_habiles_tope_pronto_pago'] ?? 5));
+    $feriados = is_array($param['fechas_feriado'] ?? null) ? $param['fechas_feriado'] : [];
+    $desde = new DateTimeImmutable(cobranza_cuota_fecha_generacion($pdo, $cuota));
+
+    return cobranza_fecha_nesimo_dia_habil_desde($desde, $dias, $feriados);
+}
+
+/**
+ * Cuota impaga y con tope de pronto pago vencido (para informe de morosos).
+ */
+function cobranza_cuota_vencida_para_moroso(
+    PDO $pdo,
+    array $cuota,
+    array $param,
+    ?DateTimeImmutable $fechaRef = null
+): bool {
+    if (cobranza_saldo_impago_cuota($cuota) <= 0.005) {
+        return false;
+    }
+    $fechaRef = $fechaRef ?? new DateTimeImmutable('today');
+    $tope = cobranza_cuota_fecha_tope_pronto_desde_generacion($pdo, $cuota, $param);
+
+    return $fechaRef > $tope;
+}
+
+/**
+ * Alumnos con al menos una cuota mensual impaga y fuera de plazo de pronto pago.
+ *
+ * @return list<int>
+ */
+function cobranza_alumno_ids_con_cuotas_vencidas(PDO $pdo, ?DateTimeImmutable $fechaRef = null): array
+{
+    $param = cobranza_cargar_parametros($pdo);
+    $fechaRef = $fechaRef ?? new DateTimeImmutable('today');
     $anioOp = cobranza_anio_operativo_desde();
     $expr = cobranza_sql_expr_saldo_impago();
     $sql = '
         SELECT cm.*,
                COALESCE(pa.aplicado, 0) AS aplicado_acum,
+               COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
                ' . $expr . ' AS saldo_impago
         FROM cuota_mensual cm
-        LEFT JOIN (
-            SELECT cuota_id, SUM(importe_aplicado) AS aplicado
-            FROM pago_aplica_cuota
-            GROUP BY cuota_id
-        ) pa ON pa.cuota_id = cm.id
+        INNER JOIN alumnos al ON al.id = cm.alumno_id
+        ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
         ' . cobranza_sql_join_legacy_haber_por_periodo() . "
-        WHERE cm.alumno_id = ?
-          AND cm.anio >= {$anioOp}
+        WHERE cm.anio >= {$anioOp}
           AND cm.estado <> 'anulada'
           AND {$expr} > 0.005
-        ORDER BY cm.anio, cm.mes
     ";
-    $st = $pdo->prepare($sql);
-    $st->execute([$alumnoId]);
+    $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    if (!is_array($rows)) {
+        return [];
+    }
+    $ids = [];
+    foreach ($rows as $cm) {
+        if (!cobranza_cuota_vencida_para_moroso($pdo, $cm, $param, $fechaRef)) {
+            continue;
+        }
+        $aid = (int) ($cm['alumno_id'] ?? 0);
+        if ($aid > 0) {
+            $ids[$aid] = true;
+        }
+    }
 
-    return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    return array_map('intval', array_keys($ids));
+}
+
+/**
+ * @return list<array<string, mixed>>
+ */
+function cobranza_listar_cuotas_impagas(PDO $pdo, ?int $alumnoId = null): array
+{
+    $anioOp = cobranza_anio_operativo_desde();
+    $expr = cobranza_sql_expr_saldo_impago();
+    $sql = '
+        SELECT cm.*,
+               COALESCE(pa.aplicado, 0) AS aplicado_acum,
+               COALESCE(pa.descuento_acum, 0) AS descuento_acum,
+               COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
+               ' . $expr . ' AS saldo_impago
+        FROM cuota_mensual cm
+        ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
+        ' . cobranza_sql_join_legacy_haber_por_periodo() . "
+        WHERE cm.anio >= {$anioOp}
+          AND cm.estado <> 'anulada'
+          AND {$expr} > 0.005
+    ";
+    $params = [];
+    if ($alumnoId !== null && $alumnoId > 0) {
+        $sql .= ' AND cm.alumno_id = ?';
+        $params[] = $alumnoId;
+    }
+    $sql .= ' ORDER BY cm.alumno_id, cm.anio, cm.mes';
+    $st = $pdo->prepare($sql);
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    return is_array($rows) ? $rows : [];
+}
+
+function cobranza_cuotas_pendientes_alumno(PDO $pdo, int $alumnoId): array
+{
+    if ($alumnoId <= 0) {
+        return [];
+    }
+
+    return cobranza_listar_cuotas_impagas($pdo, $alumnoId);
 }
 
 function cobranza_saldo_impago_cuota(array $cuota): float
 {
     $orig = (float) ($cuota['importe_original'] ?? 0);
     $aplicado = (float) ($cuota['aplicado_acum'] ?? 0);
+    $desc = (float) ($cuota['descuento_acum'] ?? 0);
     $leg = (float) ($cuota['haber_legacy_acum'] ?? 0);
     $saldoRow = (float) ($cuota['saldo'] ?? 0);
     if ($orig > 0.00001) {
-        return max(0.0, round($orig - $aplicado - $leg, 2));
+        return max(0.0, round($orig - $aplicado - $desc - $leg, 2));
     }
 
     return max(0.0, round($saldoRow, 2));
+}
+
+/** Descuento pronto pago registrado en las líneas de cuota del recibo. */
+function cobranza_pago_desc_pronto_en_lineas(array $lineasRecibo): float
+{
+    $total = 0.0;
+    foreach ($lineasRecibo as $lr) {
+        $total += (float) ($lr['importe_descuento'] ?? 0);
+    }
+
+    return round($total, 2);
+}
+
+/**
+ * Importe bruto de una cuota en recibo/FE (capital neto + descuento pronto de la línea).
+ */
+function cobranza_pago_cuota_bruto_linea(array $pacLinea, float $descProntoExtra = 0.0): float
+{
+    $net = round((float) ($pacLinea['importe_capital'] ?? 0), 2);
+    $desc = round((float) ($pacLinea['importe_descuento'] ?? 0), 2);
+    if ($desc < 0.00001 && $descProntoExtra > 0.00001) {
+        $desc = round($descProntoExtra, 2);
+    }
+
+    return round($net + $desc, 2);
+}
+
+/**
+ * Descuento pronto pago del recibo (total menos descuento por forma de pago).
+ *
+ * @param array<string,mixed> $pago
+ */
+function cobranza_pago_desc_pronto_cuotas(array $pago): float
+{
+    $descMedio = round((float) ($pago['importe_descuento_medio'] ?? 0), 2);
+    $descTotal = round((float) ($pago['importe_descuento'] ?? 0), 2);
+
+    return round(max(0.0, $descTotal - $descMedio), 2);
+}
+
+/**
+ * Detalle unificado para recibo provisorio y factura electrónica.
+ * Cuotas al importe bruto; descuento pronto pago en fila aparte (cuadra con total cobrado).
+ *
+ * @param array<string,mixed> $pago
+ * @param list<array<string,mixed>> $lineasRecibo
+ * @param list<array<string,mixed>> $ajustesRecibo
+ * @param list<array<string,mixed>> $itemsRecibo
+ * @return list<array{concepto:string, importe:float}>
+ */
+function cobranza_pago_lineas_detalle_recibo(
+    array $pago,
+    array $lineasRecibo,
+    array $ajustesRecibo,
+    array $itemsRecibo
+): array {
+    $filas = [];
+    $descProntoEnLineas = cobranza_pago_desc_pronto_en_lineas($lineasRecibo);
+    $descCuotas = cobranza_pago_desc_pronto_cuotas($pago);
+    $descHuerfano = $descCuotas > 0.009 && $descProntoEnLineas < 0.009;
+    $cuotaUnica = count($lineasRecibo) === 1;
+
+    foreach ($lineasRecibo as $lr) {
+        $anio = (int) ($lr['anio'] ?? 0);
+        $mes = (int) ($lr['mes'] ?? 0);
+        $per = sprintf('%04d-%02d', $anio, $mes);
+        $extraDesc = ($descHuerfano && $cuotaUnica) ? $descCuotas : 0.0;
+        $bruto = cobranza_pago_cuota_bruto_linea($lr, $extraDesc);
+        if ($bruto > 0.00001) {
+            $filas[] = ['concepto' => 'Cuota mensual ' . $per, 'importe' => $bruto];
+        }
+    }
+
+    foreach ($ajustesRecibo as $ar) {
+        if (cobranza_ajuste_es_espejo_item_recibo($ar)) {
+            continue;
+        }
+        $concepto = trim((string) ($ar['concepto'] ?? 'Obligación'));
+        if (str_starts_with($concepto, 'FACT/REC:')) {
+            $concepto = trim(substr($concepto, 9));
+        }
+        if ($concepto === '') {
+            $concepto = 'Obligación';
+        }
+        $base = round((float) ($ar['debe'] ?? 0), 2);
+        if ($base > 0.00001) {
+            $filas[] = ['concepto' => $concepto, 'importe' => $base];
+        }
+    }
+
+    foreach ($itemsRecibo as $it) {
+        $tot = round((float) ($it['importe_total'] ?? 0), 2);
+        if ($tot > 0.00001) {
+            $filas[] = [
+                'concepto' => (string) ($it['descripcion'] ?? 'Ítem'),
+                'importe' => $tot,
+            ];
+        }
+    }
+
+    $recMora = round((float) ($pago['importe_interes'] ?? 0), 2);
+    if ($recMora > 0.00001) {
+        $filas[] = ['concepto' => 'Recargo por mora', 'importe' => $recMora];
+    }
+    $beca = round((float) ($pago['importe_beca_perdida'] ?? 0), 2);
+    if ($beca > 0.00001) {
+        $filas[] = ['concepto' => 'Diferencia BECA', 'importe' => $beca];
+    }
+    if ($descCuotas > 0.00001) {
+        $filas[] = ['concepto' => 'Descuento (pronto pago)', 'importe' => -$descCuotas];
+    }
+    $recMedio = round((float) ($pago['importe_recargo_medio'] ?? 0), 2);
+    if ($recMedio > 0.00001) {
+        $filas[] = ['concepto' => 'Recargo por forma de pago', 'importe' => $recMedio];
+    }
+    $descMedio = round((float) ($pago['importe_descuento_medio'] ?? 0), 2);
+    if ($descMedio > 0.00001) {
+        $filas[] = ['concepto' => 'Descuento en efectivo', 'importe' => -$descMedio];
+    }
+
+    return $filas;
 }
 
 /**
@@ -548,7 +997,8 @@ function cobranza_calcular_linea_saldo(
     float $saldo,
     string $fechaPagoYmd,
     bool $tieneBeca = false,
-    float $difBeca = 0.0
+    float $difBeca = 0.0,
+    string $articuloBecaDetalle = ''
 ): array {
     $saldo = max(0.0, round($saldo, 2));
 
@@ -572,27 +1022,56 @@ function cobranza_calcular_linea_saldo(
     $pierdeBeca = $difBeca > 0.00001 && $fp > $topeBeca;
     $diasMora = $dentro ? 0 : cobranza_dias_mora_calendario($tope, $fp);
 
+    // Beca fuera del 5.º día hábil: deuda = abono mensual completo; mora sobre ese monto (no beca + dif. + mora sobre beca).
+    $abonoMensual = 0.0;
+    $becaEnAbonoCompleto = false;
+    if ($tieneBeca && $pierdeBeca) {
+        $abonoMensual = round($saldo + $difBeca, 2);
+        if ($abonoCompletoRef > $abonoMensual + 0.005) {
+            $abonoMensual = round($abonoCompletoRef, 2);
+        }
+        $becaEnAbonoCompleto = true;
+    }
+
     $desc = 0.0;
     $recVar = 0.0;
     $recFijo = 0.0;
     if ($dentro) {
-        $desc = min($descFijo, $saldo);
-        $capital = round($saldo - $desc, 2);
+        if ($becaEnAbonoCompleto) {
+            $desc = min($descFijo, $abonoMensual);
+            $capital = round($abonoMensual - $desc, 2);
+        } else {
+            $desc = min($descFijo, $saldo);
+            $capital = round($saldo - $desc, 2);
+        }
     } else {
-        // Fox: INTDIA = RECARGO/30 (%/día), INTFIN = INTDIA×días, RECA = DEBE×INTFIN/100.
-        $recVar = round($saldo * $coefDiario * $diasMora / 100, 2);
-        $recFijo = $diasMora > 0 ? $interesFijoMora : 0.0;
-        $capital = $saldo;
+        if ($becaEnAbonoCompleto) {
+            // Fox: INTDIA = RECARGO/30 (%/día), INTFIN = INTDIA×días, RECA = DEBE×INTFIN/100.
+            $recVar = round($abonoMensual * $coefDiario * $diasMora / 100, 2);
+            $recFijo = $diasMora > 0 ? $interesFijoMora : 0.0;
+            $capital = $abonoMensual;
+        } else {
+            $recVar = round($saldo * $coefDiario * $diasMora / 100, 2);
+            $recFijo = $diasMora > 0 ? $interesFijoMora : 0.0;
+            $capital = $saldo;
+        }
     }
 
-    $impBecaPerdida = $pierdeBeca ? round($difBeca, 2) : 0.0;
+    $impBecaPerdida = $becaEnAbonoCompleto ? 0.0 : ($pierdeBeca ? round($difBeca, 2) : 0.0);
     $total = round($capital + $recVar + $recFijo + $impBecaPerdida, 2);
+    $baseCalculo = $becaEnAbonoCompleto ? $abonoMensual : $saldo;
+    $articuloBecaDetalle = $tieneBeca ? trim($articuloBecaDetalle) : '';
 
     return [
         'fecha_tope_pronto' => $tope->format('Y-m-d'),
         'dentro_pronto' => $dentro,
         'dias_mora' => $diasMora,
         'saldo_cuota' => $saldo,
+        'tiene_beca' => $tieneBeca,
+        'articulo_beca_detalle' => $articuloBecaDetalle,
+        'abono_mensual_base' => $abonoMensual,
+        'beca_en_abono_completo' => $becaEnAbonoCompleto,
+        'base_calculo' => $baseCalculo,
         'importe_descuento' => round($desc, 2),
         'importe_recargo_variable' => $recVar,
         'importe_recargo_fijo' => $recFijo,
@@ -619,8 +1098,135 @@ function cobranza_calcular_linea_cuota(array $param, array $cuota, string $fecha
     $saldo = cobranza_saldo_impago_cuota($cuota);
     $difBeca = max(0.0, (float) ($cuota['importe_diferencia_beca'] ?? 0));
     $tieneBeca = (int) ($cuota['tiene_beca'] ?? 0) === 1;
+    $artBeca = trim((string) ($cuota['articulos_beca_detalle'] ?? ''));
 
-    return cobranza_calcular_linea_saldo($param, $anio, $mes, $saldo, $fechaPagoYmd, $tieneBeca, $difBeca);
+    return cobranza_calcular_linea_saldo($param, $anio, $mes, $saldo, $fechaPagoYmd, $tieneBeca, $difBeca, $artBeca);
+}
+
+/**
+ * Aplica un abono a una línea calculada (cobro parcial). Reparto proporcional entre componentes.
+ *
+ * @param array<string,mixed> $calc
+ * @return array<string,mixed> calc ajustado + importe_abonado, es_parcial, saldo_remanente_linea, total_linea_original
+ */
+function cobranza_aplicar_abono_linea(array $calc, float $abono): array
+{
+    $total = round((float) ($calc['total_linea'] ?? 0), 2);
+    $abono = round(max(0.0, $abono), 2);
+    if ($total <= 0.00001) {
+        throw new InvalidArgumentException('Línea sin importe a cobrar.');
+    }
+    if ($abono <= 0.00001) {
+        throw new InvalidArgumentException('El abono debe ser mayor a cero.');
+    }
+    if ($abono > $total + 0.009) {
+        throw new InvalidArgumentException(
+            'El abono no puede superar el total de la línea ($ ' . number_format($total, 2, ',', '.') . ').'
+        );
+    }
+
+    if ($abono >= $total - 0.009) {
+        $out = $calc;
+        $out['total_linea_original'] = $total;
+        $out['importe_abonado'] = $total;
+        $out['es_parcial'] = false;
+        $out['saldo_remanente_linea'] = 0.0;
+
+        return $out;
+    }
+
+    $ratio = $abono / $total;
+    $out = $calc;
+    $out['total_linea_original'] = $total;
+    $out['importe_capital'] = round((float) ($calc['importe_capital'] ?? 0) * $ratio, 2);
+    $out['importe_recargo_variable'] = round((float) ($calc['importe_recargo_variable'] ?? 0) * $ratio, 2);
+    $out['importe_recargo_fijo'] = round((float) ($calc['importe_recargo_fijo'] ?? 0) * $ratio, 2);
+    $out['importe_beca_perdida'] = round((float) ($calc['importe_beca_perdida'] ?? 0) * $ratio, 2);
+    $out['importe_descuento'] = round((float) ($calc['importe_descuento'] ?? 0) * $ratio, 2);
+
+    $sumParts = round(
+        $out['importe_capital'] + $out['importe_recargo_variable']
+        + $out['importe_recargo_fijo'] + $out['importe_beca_perdida'],
+        2
+    );
+    $diff = round($abono - $sumParts, 2);
+    if (abs($diff) >= 0.005) {
+        $out['importe_capital'] = round($out['importe_capital'] + $diff, 2);
+    }
+
+    $out['total_linea'] = $abono;
+    $out['importe_abonado'] = $abono;
+    $out['es_parcial'] = true;
+    $out['saldo_remanente_linea'] = round($total - $abono, 2);
+
+    return $out;
+}
+
+/**
+ * @param array<string, mixed|string> $raw POST abono_cuota / abono_ajuste
+ */
+function cobranza_parse_abono_post(array $raw, int $id, float $totalLinea): float
+{
+    $key = (string) $id;
+    if (!array_key_exists($key, $raw) && !array_key_exists($id, $raw)) {
+        return round($totalLinea, 2);
+    }
+    $val = $raw[$key] ?? $raw[$id] ?? $totalLinea;
+    $s = str_replace([' ', '.'], ['', ''], trim((string) $val));
+    $s = str_replace(',', '.', $s);
+    if ($s === '' || !is_numeric($s)) {
+        return round($totalLinea, 2);
+    }
+
+    return round((float) $s, 2);
+}
+
+/**
+ * @param array<string,mixed> $cuota
+ */
+function cobranza_actualizar_cuota_post_cobro(PDO $pdo, array $cuota, array $calcAplicada): void
+{
+    $cid = (int) ($cuota['id'] ?? 0);
+    if ($cid <= 0) {
+        return;
+    }
+    $saldoImpago = cobranza_saldo_impago_cuota($cuota);
+    $reduccion = round(
+        (float) ($calcAplicada['importe_capital'] ?? 0) + (float) ($calcAplicada['importe_descuento'] ?? 0),
+        2
+    );
+    $nuevoSaldo = max(0.0, round($saldoImpago - $reduccion, 2));
+    $estado = $nuevoSaldo <= 0.005 ? 'pagada' : 'parcial';
+    if ($nuevoSaldo <= 0.005) {
+        $nuevoSaldo = 0.0;
+    }
+
+    $becaPerdida = round((float) ($calcAplicada['importe_beca_perdida'] ?? 0), 2);
+    $esParcial = !empty($calcAplicada['es_parcial']);
+    $setBeca = !$esParcial && $becaPerdida > 0.005;
+
+    if (db_has_column($pdo, 'cuota_mensual', 'importe_diferencia_beca')) {
+        $st = $pdo->prepare(
+            'UPDATE cuota_mensual
+             SET saldo = ?,
+                 estado = ?,
+                 importe_diferencia_beca = CASE
+                    WHEN ? = 1 AND COALESCE(importe_diferencia_beca, 0) <= 0 THEN ?
+                    ELSE importe_diferencia_beca
+                 END
+             WHERE id = ?'
+        );
+        $st->execute([
+            $nuevoSaldo,
+            $estado,
+            $setBeca ? 1 : 0,
+            $becaPerdida,
+            $cid,
+        ]);
+    } else {
+        $st = $pdo->prepare('UPDATE cuota_mensual SET saldo = ?, estado = ? WHERE id = ?');
+        $st->execute([$nuevoSaldo, $estado, $cid]);
+    }
 }
 
 /**
@@ -633,7 +1239,8 @@ function cobranza_calcular_linea_debe_pendiente(
     array $param,
     array $adj,
     string $fechaPagoYmd,
-    bool $tieneBecaAlumno = false
+    bool $tieneBecaAlumno = false,
+    string $articuloBecaDetalle = ''
 ): array {
     $saldo = max(0.0, round((float) ($adj['debe'] ?? 0), 2));
     if ($saldo <= 0.00001) {
@@ -698,6 +1305,7 @@ function cobranza_calcular_linea_debe_pendiente(
         $saldo,
         $fechaPagoYmd,
         $tieneBecaAlumno,
-        0.0
+        0.0,
+        $articuloBecaDetalle
     );
 }

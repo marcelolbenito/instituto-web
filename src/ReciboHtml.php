@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/FormasPago.php';
 require_once __DIR__ . '/Cobranza.php';
 require_once __DIR__ . '/InstitutoLogo.php';
+require_once __DIR__ . '/PagoAnulacion.php';
 
 /**
  * Carga datos de un recibo (pago_registrado) para vista o impresión.
@@ -64,7 +65,7 @@ function recibo_cargar_por_pago(PDO $pdo, int $pagoId, int $alumnoIdEsperado = 0
     $ajustes = [];
     if (db_has_column($pdo, 'cc_ajuste_debe', 'debe')) {
         $stAdj = $pdo->prepare(
-            'SELECT concepto, debe, fecha_mov FROM cc_ajuste_debe WHERE pago_id = ? ORDER BY id'
+            'SELECT concepto, debe, fecha_mov, referencia FROM cc_ajuste_debe WHERE pago_id = ? ORDER BY id'
         );
         $stAdj->execute([$pagoId]);
         $ajustes = $stAdj->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -130,14 +131,6 @@ function recibo_render_html(
     $fechaRec = (string) $pago['fecha_pago'];
     $tsRec = strtotime($fechaRec);
     $fechaRecTxt = $tsRec !== false ? date('d/m/Y', $tsRec) : $fechaRec;
-    $recMedio = (float) ($pago['importe_recargo_medio'] ?? 0);
-    $descMedio = (float) ($pago['importe_descuento_medio'] ?? 0);
-    $recMora = (float) ($pago['importe_interes'] ?? 0);
-    $becaPerd = (float) ($pago['importe_beca_perdida'] ?? 0);
-    $descCuotas = (float) ($pago['importe_descuento'] ?? 0) - $descMedio;
-    if ($descCuotas < 0) {
-        $descCuotas = 0.0;
-    }
 
     echo '<section id="recibo" class="card cobro-card recibo-simple recibo-impresion">';
     echo '<header class="recibo-encabezado-impresion">';
@@ -145,6 +138,14 @@ function recibo_render_html(
     echo '<p class="recibo-titulo-principal">RECIBO PROVISORIO</p>';
     echo '<p class="recibo-numero">Nº ' . (int) $pago['id'] . '</p>';
     echo '</header>';
+    if (pago_anulacion_schema_ok($pdo) && pago_esta_anulado($pago)) {
+        echo '<p class="err recibo-anulado-banner" style="text-align:center;font-weight:bold;border:2px solid #c0392b;padding:0.5rem">'
+            . 'RECIBO ANULADO</p>';
+        $motAn = trim((string) ($pago['motivo_anulacion'] ?? ''));
+        if ($motAn !== '') {
+            echo '<p class="muted" style="text-align:center">Motivo: ' . h($motAn) . '</p>';
+        }
+    }
     if ($alumno) {
         echo '<p class="recibo-alumno"><strong>' . h((string) $alumno['nombre_completo']) . '</strong>';
         $doc = trim((string) ($alumno['documento'] ?? ''));
@@ -158,6 +159,10 @@ function recibo_render_html(
     }
     echo '<p class="recibo-meta">Fecha de pago: <strong>' . h($fechaRecTxt) . '</strong><br>';
     echo 'Forma de pago: <strong>' . h($etiqMedio) . '</strong>';
+    $notaParcial = trim((string) ($pago['nota'] ?? ''));
+    if (strcasecmp($notaParcial, 'Abono parcial') === 0) {
+        echo '<br><span class="badge badge-warn">Abono parcial — consulte CC por saldo pendiente</span>';
+    }
     if (!empty($pago['referencia_medio'])) {
         echo '<br>Referencia: <strong>' . h((string) $pago['referencia_medio']) . '</strong>';
     }
@@ -165,47 +170,13 @@ function recibo_render_html(
 
     echo '<h3 class="recibo-subtitle">Detalle cobrado</h3>';
     echo '<table class="table recibo-tabla-simple"><thead><tr><th>Concepto</th><th class="num">Importe</th></tr></thead><tbody>';
-    foreach ($lineasRecibo as $lr) {
-        $per = (int) $lr['anio'] . '-' . str_pad((string) ((int) $lr['mes']), 2, '0', STR_PAD_LEFT);
-        $lineaTot = (float) ($lr['importe_aplicado'] ?? 0);
-        if ($lineaTot < 0.00001) {
-            $lineaTot = (float) ($lr['importe_capital'] ?? 0)
-                + (float) ($lr['importe_recargo'] ?? 0)
-                + (float) ($lr['importe_beca_perdida'] ?? 0)
-                - (float) ($lr['importe_descuento'] ?? 0);
-        }
-        echo '<tr><td>Cuota mensual ' . h($per) . '</td><td class="num">$ '
-            . number_format($lineaTot, 2, ',', '.') . '</td></tr>';
-    }
-    foreach ($ajustesRecibo as $ar) {
-        $concepto = trim((string) ($ar['concepto'] ?? 'Obligación'));
-        $base = (float) ($ar['debe'] ?? 0);
-        echo '<tr><td>' . h($concepto) . '</td><td class="num">$ '
-            . number_format($base, 2, ',', '.') . '</td></tr>';
-    }
-    foreach ($itemsRecibo as $it) {
-        echo '<tr><td>' . h((string) ($it['descripcion'] ?? 'Ítem')) . '</td><td class="num">$ '
-            . number_format((float) ($it['importe_total'] ?? 0), 2, ',', '.') . '</td></tr>';
-    }
-    if ($recMora > 0.00001) {
-        echo '<tr><td>Recargo por mora</td><td class="num">$ '
-            . number_format($recMora, 2, ',', '.') . '</td></tr>';
-    }
-    if ($becaPerd > 0.00001) {
-        echo '<tr><td>Diferencia BECA</td><td class="num">$ '
-            . number_format($becaPerd, 2, ',', '.') . '</td></tr>';
-    }
-    if ($descCuotas > 0.00001) {
-        echo '<tr><td>Descuento (pronto pago)</td><td class="num">−$ '
-            . number_format($descCuotas, 2, ',', '.') . '</td></tr>';
-    }
-    if ($recMedio > 0.00001) {
-        echo '<tr><td>Recargo por forma de pago</td><td class="num">$ '
-            . number_format($recMedio, 2, ',', '.') . '</td></tr>';
-    }
-    if ($descMedio > 0.00001) {
-        echo '<tr><td>Descuento en efectivo</td><td class="num">−$ '
-            . number_format($descMedio, 2, ',', '.') . '</td></tr>';
+    $filasDetalle = cobranza_pago_lineas_detalle_recibo($pago, $lineasRecibo, $ajustesRecibo, $itemsRecibo);
+    foreach ($filasDetalle as $fila) {
+        $imp = (float) $fila['importe'];
+        $prefijo = $imp < -0.00001 ? '−$ ' : '$ ';
+        $monto = number_format(abs($imp), 2, ',', '.');
+        echo '<tr><td>' . h((string) $fila['concepto']) . '</td><td class="num">' . $prefijo
+            . $monto . '</td></tr>';
     }
     echo '<tr class="recibo-total-row"><td><strong>Total cobrado</strong></td><td class="num"><strong>$ '
         . number_format((float) $pago['importe'], 2, ',', '.') . '</strong></td></tr>';

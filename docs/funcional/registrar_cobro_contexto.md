@@ -83,8 +83,12 @@ Los ítems de artículo del recibo siguen usando `RECIBO_ITEM:` (misma idea).
 
 Reparación histórica: `php tools/reparar_cc_incrementos_cobro.php [alumno_id]` y luego verificar CC.
 
+## Cobro parcial (web)
+
+En **paso 3** de registrar cobro, columna **Abona ahora**: default = total calculado; si es menor, la cuota queda `parcial`, `pago_aplica_cuota` registra el abono y la CC refleja haber + contramovimientos proporcionales. Debes manuales: solo cobro completo.
+
 ## Pendientes naturales para otra iteración
 
 - Corregir en datos **`cuota_mensual.estado`** donde quedó `pagada` inconsistente.
-- Cobro parcial por cuota / comprobante fiscal si se define producto.
+- Cobro parcial en obligaciones CC con mora (vincular `pago_id` solo al saldar).
 - Opcional: unificar criterio legacy-período en **cuenta corriente** al 100% con cobro.

@@ -5,6 +5,7 @@ require_once __DIR__ . '/util.php';
 require_once __DIR__ . '/Saldos.php';
 require_once __DIR__ . '/Cobranza.php';
 require_once __DIR__ . '/FormasPago.php';
+require_once __DIR__ . '/PagoAnulacion.php';
 
 function cc_extract_period_from_reference(string $ref): ?string
 {
@@ -211,12 +212,12 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
         $sqlAdj = 'SELECT id, fecha_mov, concepto, debe, pago_id, referencia
              FROM cc_ajuste_debe
              WHERE alumno_id = ?
-               AND COALESCE(debe, 0) > 0.005';
+               AND ABS(COALESCE(debe, 0)) > 0.005';
         if ($vistaOperativa) {
             $desdeAdj = $fechaCorte ?? sprintf('%d-01-01', $anioOperativo);
-            $sqlAdj .= ' AND (pago_id IS NULL OR fecha_mov >= ? OR referencia LIKE \'RECIBO_INC:%\')';
+            $sqlAdj .= ' AND (pago_id IS NULL OR fecha_mov >= ? OR referencia LIKE \'RECIBO_INC:%\' OR referencia LIKE \'RECIBO_DEC:%\')';
         } else {
-            $sqlAdj .= ' AND (pago_id IS NULL OR referencia LIKE \'RECIBO_INC:%\')';
+            $sqlAdj .= ' AND (pago_id IS NULL OR referencia LIKE \'RECIBO_INC:%\' OR referencia LIKE \'RECIBO_DEC:%\')';
         }
         $stAdj = $pdo->prepare($sqlAdj);
         $paramsAdj = [$alumnoId];
@@ -238,14 +239,25 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
             $presAjDet = cobranza_debe_pendiente_presentacion($aj);
             $esPend = empty($aj['pago_id']);
             $sufijo = $esPend ? '' : ' (cobrado)';
-            $movimientos[] = [
-                'fecha_mov' => $fechaAj,
-                'periodo' => $perAj,
-                'concepto' => $presAjDet['etiqueta_tipo'] . ': ' . $presAjDet['concepto'] . $sufijo,
-                'debe' => $debeAj,
-                'haber' => 0.0,
-                'pago_id' => $esPend ? null : (int) $aj['pago_id'],
-            ];
+            if ($debeAj < -0.005) {
+                $movimientos[] = [
+                    'fecha_mov' => $fechaAj,
+                    'periodo' => $perAj,
+                    'concepto' => $presAjDet['etiqueta_tipo'] . ': ' . $presAjDet['concepto'] . $sufijo,
+                    'debe' => 0.0,
+                    'haber' => abs($debeAj),
+                    'pago_id' => $esPend ? null : (int) $aj['pago_id'],
+                ];
+            } else {
+                $movimientos[] = [
+                    'fecha_mov' => $fechaAj,
+                    'periodo' => $perAj,
+                    'concepto' => $presAjDet['etiqueta_tipo'] . ': ' . $presAjDet['concepto'] . $sufijo,
+                    'debe' => $debeAj,
+                    'haber' => 0.0,
+                    'pago_id' => $esPend ? null : (int) $aj['pago_id'],
+                ];
+            }
         }
     }
 
@@ -270,6 +282,9 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
     } else {
         $colsPago .= ', 0 AS importe_recargo_medio, 0 AS importe_descuento_medio';
     }
+    if (db_has_column($pdo, 'pago_registrado', 'anulado_en')) {
+        $colsPago .= ', anulado_en, motivo_anulacion';
+    }
     $stPagos = $pdo->prepare(
         "SELECT {$colsPago} FROM pago_registrado WHERE alumno_id = ? AND fecha_pago IS NOT NULL"
     );
@@ -278,6 +293,9 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
 
     $marcasFoxPorMovimiento = [];
     foreach ($pagosRaw as $p) {
+        if (pago_anulacion_schema_ok($pdo) && pago_esta_anulado($p)) {
+            continue;
+        }
         $haberPago = cc_haber_desde_pago_row($p);
         $fechaMov = (string) $p['fecha_pago'];
         $ref = trim((string) ($p['referencia'] ?? ''));
@@ -304,6 +322,9 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
     }
 
     foreach ($pagosRaw as $p) {
+        if (pago_anulacion_schema_ok($pdo) && pago_esta_anulado($p)) {
+            continue;
+        }
         $haberPago = cc_haber_desde_pago_row($p);
         if (abs($haberPago) < 0.00001) {
             continue;

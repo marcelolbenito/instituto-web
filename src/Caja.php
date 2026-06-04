@@ -99,9 +99,10 @@ function caja_resumen_por_medio(PDO $pdo, string $fechaYmd): array
 
     if (caja_tiene_pago_id($pdo)) {
         $exprFecha = caja_sql_expr_fecha_operativa();
+        $sqlIng = caja_sql_importe_ingreso_vigente($pdo);
         $sql = "SELECT cm.medio,
-                COALESCE(SUM(CASE WHEN cm.tipo = 'ingreso' THEN cm.importe ELSE 0 END), 0) AS ingresos,
-                COALESCE(SUM(CASE WHEN cm.tipo = 'egreso' THEN cm.importe ELSE 0 END), 0) AS egresos
+                COALESCE(SUM({$sqlIng}), 0) AS ingresos,
+                COALESCE(SUM(" . caja_sql_importe_egreso() . "), 0) AS egresos
              FROM caja_movimiento cm
              LEFT JOIN pago_registrado pr ON pr.id = cm.pago_id
              WHERE {$exprFecha} = ?
@@ -338,6 +339,122 @@ function caja_sql_expr_fecha_operativa(): string
     return 'DATE(COALESCE(pr.fecha_pago, cm.fecha_hora))';
 }
 
+/** Ingresos de recibos anulados no suman en arqueo / totales operativos. */
+function caja_tiene_filtro_anulados(PDO $pdo): bool
+{
+    static $ok = null;
+    if ($ok !== null) {
+        return $ok;
+    }
+    $ok = caja_tiene_pago_id($pdo) && db_has_column($pdo, 'pago_registrado', 'anulado_en');
+
+    return $ok;
+}
+
+function caja_sql_importe_ingreso_vigente(PDO $pdo): string
+{
+    if (!caja_tiene_filtro_anulados($pdo)) {
+        return "CASE WHEN cm.tipo = 'ingreso' THEN cm.importe ELSE 0 END";
+    }
+
+    return "CASE
+        WHEN cm.tipo = 'ingreso' AND cm.pago_id IS NOT NULL AND pr.anulado_en IS NOT NULL THEN 0
+        WHEN cm.tipo = 'ingreso' THEN cm.importe
+        ELSE 0
+    END";
+}
+
+function caja_sql_importe_egreso(): string
+{
+    return "CASE WHEN cm.tipo = 'egreso' THEN cm.importe ELSE 0 END";
+}
+
+/**
+ * @return array{estado:string,msg:string}
+ *   estado: registrado | omitido_cierre | sin_impacto | sin_ingreso | duplicado
+ */
+function caja_registrar_egreso_por_anulacion(
+    PDO $pdo,
+    int $pagoId,
+    int $alumnoId,
+    string $fechaCobroYmd,
+    float $importe,
+    string $medioSlug,
+    string $motivo
+): array {
+    if (!caja_schema_ok($pdo) || $pagoId <= 0 || $importe <= 0.00001) {
+        return ['estado' => 'sin_impacto', 'msg' => ''];
+    }
+    if (!caja_cobro_impacta_caja($medioSlug)) {
+        return ['estado' => 'sin_impacto', 'msg' => 'Cobro en cuenta corriente: no impacta caja física.'];
+    }
+
+    $refAnul = 'ANUL:PAGO:' . $pagoId;
+    $stDup = $pdo->prepare(
+        'SELECT id FROM caja_movimiento WHERE referencia = ? AND tipo = \'egreso\' LIMIT 1'
+    );
+    $stDup->execute([$refAnul]);
+    if ($stDup->fetch()) {
+        return ['estado' => 'duplicado', 'msg' => ''];
+    }
+
+    $habiaIngreso = false;
+    if (caja_tiene_pago_id($pdo)) {
+        $stIng = $pdo->prepare(
+            'SELECT id FROM caja_movimiento WHERE pago_id = ? AND tipo = \'ingreso\' LIMIT 1'
+        );
+        $stIng->execute([$pagoId]);
+        $habiaIngreso = (bool) $stIng->fetch();
+    }
+    if (!$habiaIngreso) {
+        return ['estado' => 'sin_ingreso', 'msg' => 'No había movimiento de caja vinculado a este recibo.'];
+    }
+
+    $fechaCobro = preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaCobroYmd) === 1
+        ? $fechaCobroYmd
+        : date('Y-m-d');
+
+    if (caja_cierre_schema_ok($pdo) && caja_esta_cerrada($pdo, $fechaCobro)) {
+        $ts = strtotime($fechaCobro);
+        $txt = $ts !== false ? date('d/m/Y', $ts) : $fechaCobro;
+
+        return [
+            'estado' => 'omitido_cierre',
+            'msg' => 'La caja del ' . $txt . ' ya está cerrada: no se agregó egreso automático. '
+                . 'El ingreso del recibo deja de contar en totales operativos; el cierre impreso conserva el histórico.',
+        ];
+    }
+
+    $fechaHora = $fechaCobro . ' ' . date('H:i:s');
+    $medio = caja_medio_desde_cobro($medioSlug);
+    $obs = 'Anulación recibo Nº ' . $pagoId;
+    $motivoTrim = trim($motivo);
+    if ($motivoTrim !== '') {
+        $obs .= ' — ' . $motivoTrim;
+    }
+    if (mb_strlen($obs) > 250) {
+        $obs = mb_substr($obs, 0, 250);
+    }
+
+    $ins = $pdo->prepare(
+        'INSERT INTO caja_movimiento (comprobante_id, alumno_id, fecha_hora, tipo, medio, referencia, importe, observaciones)
+         VALUES (NULL, ?, ?, \'egreso\', ?, ?, ?, ?)'
+    );
+    $ins->execute([
+        $alumnoId > 0 ? $alumnoId : null,
+        $fechaHora,
+        $medio,
+        $refAnul,
+        round($importe, 2),
+        $obs,
+    ]);
+
+    return [
+        'estado' => 'registrado',
+        'msg' => 'Se registró egreso en la caja del día del cobro (compensa el ingreso del recibo).',
+    ];
+}
+
 /**
  * Crea movimientos de caja para cobros web de una fecha que aún no impactaron caja.
  */
@@ -382,8 +499,7 @@ function caja_sincronizar_cobros_fecha(PDO $pdo, string $fechaYmd): int
             (string) $p['fecha_pago'],
             (float) $p['importe'],
             $medio !== '' ? $medio : 'otro',
-            (string) ($p['referencia'] ?? ''),
-            (string) ($p['nota'] ?? '')
+            (string) ($p['referencia'] ?? '')
         )) {
             $creados++;
         }
@@ -416,6 +532,28 @@ function caja_cobro_impacta_caja(string $medioSlug): bool
     return strtolower(trim($medioSlug)) !== 'cuenta_corriente';
 }
 
+/** Texto legible en movimientos de caja por un cobro (sin parámetros técnicos). */
+function caja_observacion_cobro(int $pagoId): string
+{
+    return 'Cobro recibo Nº ' . $pagoId;
+}
+
+/**
+ * Oculta el detalle técnico antiguo (PV, mora coef, etc.) al mostrar en pantalla.
+ */
+function caja_observacion_mostrar(string $observaciones): string
+{
+    $obs = trim($observaciones);
+    if (preg_match('/^Cobro recibo #(\d+)/u', $obs, $m)) {
+        return caja_observacion_cobro((int) $m[1]);
+    }
+    if (preg_match('/^Cobro recibo Nº (\d+)/u', $obs, $m)) {
+        return caja_observacion_cobro((int) $m[1]);
+    }
+
+    return $obs;
+}
+
 /**
  * Registra ingreso por un cobro web (idempotente si existe pago_id).
  */
@@ -426,8 +564,7 @@ function caja_registrar_ingreso_por_cobro(
     string $fechaPagoYmd,
     float $importe,
     string $medioSlug,
-    string $referencia = '',
-    string $nota = ''
+    string $referencia = ''
 ): bool {
     if (!caja_schema_ok($pdo) || $pagoId <= 0 || $importe <= 0.00001) {
         return false;
@@ -448,10 +585,7 @@ function caja_registrar_ingreso_por_cobro(
         ? $fechaPagoYmd . ' ' . date('H:i:s')
         : date('Y-m-d H:i:s');
     $medio = caja_medio_desde_cobro($medioSlug);
-    $obs = 'Cobro recibo #' . $pagoId;
-    if ($nota !== '') {
-        $obs .= ' — ' . mb_substr($nota, 0, 200);
-    }
+    $obs = caja_observacion_cobro($pagoId);
     $ref = $referencia !== '' ? $referencia : ('PAGO:' . $pagoId);
 
     if (caja_tiene_pago_id($pdo)) {
@@ -534,10 +668,11 @@ function caja_resumen_dia(PDO $pdo, string $fechaYmd): array
 
     if (caja_tiene_pago_id($pdo)) {
         $exprFecha = caja_sql_expr_fecha_operativa();
+        $sqlIng = caja_sql_importe_ingreso_vigente($pdo);
         $st = $pdo->prepare(
             "SELECT
-                COALESCE(SUM(CASE WHEN cm.tipo = 'ingreso' THEN cm.importe ELSE 0 END), 0) AS ingresos,
-                COALESCE(SUM(CASE WHEN cm.tipo = 'egreso' THEN cm.importe ELSE 0 END), 0) AS egresos,
+                COALESCE(SUM({$sqlIng}), 0) AS ingresos,
+                COALESCE(SUM(" . caja_sql_importe_egreso() . "), 0) AS egresos,
                 COUNT(*) AS cantidad
              FROM caja_movimiento cm
              LEFT JOIN pago_registrado pr ON pr.id = cm.pago_id
@@ -577,9 +712,10 @@ function caja_listar_dia(PDO $pdo, string $fechaYmd): array
 
     $exprFecha = caja_sql_expr_fecha_operativa();
     if (caja_tiene_pago_id($pdo)) {
+        $colsAnul = caja_tiene_filtro_anulados($pdo) ? ', pr.anulado_en' : ', NULL AS anulado_en';
         $sql = "SELECT cm.id, cm.fecha_hora, cm.tipo, cm.medio, cm.referencia, cm.importe, cm.observaciones,
                        cm.pago_id, COALESCE(cm.alumno_id, pr.alumno_id) AS alumno_id_link,
-                       pr.fecha_pago,
+                       pr.fecha_pago{$colsAnul},
                        a.nombre_completo AS alumno_nombre
                 FROM caja_movimiento cm
                 LEFT JOIN pago_registrado pr ON pr.id = cm.pago_id

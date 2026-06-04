@@ -53,7 +53,8 @@ Opcional: sección `gesis` en `config/config.php` si no se usa la pantalla (la B
 - **Importe:** `pago_registrado.importe` (total cobrado).
 - **Receptor:** `alumnos.condicion_iva`, `cuit`, `documento` → `DocTipo` / `DocNro` / `CondicionIVAReceptorId`.
 - **Factura C (11):** `ImpNeto = ImpTotal`, `ImpIVA = 0` (instituto monotributo típico).
-- **Concepto 2 (servicios):** fechas del mes del `fecha_pago`.
+- **Fecha comprobante (`CbteFch`):** día de emisión (hoy). No la `fecha_pago` del recibo (evita AFIP 10016 en recibos viejos).
+- **Concepto 2 (servicios):** `FchServDesde` / `FchServHasta` del mes del `fecha_pago`.
 - Detalle interno en BD replica líneas del recibo (`fe_lineas_desde_recibo`).
 
 ## Próximos pasos
