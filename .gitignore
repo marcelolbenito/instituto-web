@@ -4,6 +4,8 @@ config/config.php
 
 # Datos locales / no versionar
 backups/
+revision_codigo_*.pdf
+DEV_INTEGRATION (1).md
 *.xlsx
 instituto.sql
 instituto_datos.sql
