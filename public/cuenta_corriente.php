@@ -2,18 +2,22 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/Saldos.php';
 require_once dirname(__DIR__) . '/src/Cobranza.php';
 require_once dirname(__DIR__) . '/src/FormasPago.php';
 require_once dirname(__DIR__) . '/src/CuentaCorrienteMovimientos.php';
+require_once dirname(__DIR__) . '/src/Auth.php';
+require_once dirname(__DIR__) . '/src/FacturaElectronica.php';
 
-$pdo = Db::pdo($config);
+$pdo = web_init($config);
 $hasFormasPagoCc = formas_pago_schema_ok($pdo);
 $alumnoId = isset($_GET['alumno_id']) ? (int) $_GET['alumno_id'] : 0;
-$buscar = trim((string) ($_GET['q'] ?? ''));
+auth_enforce_alumno_cc_scope($alumnoId);
+$esPortalAlumno = auth_is_alumno();
+$buscar = $esPortalAlumno ? '' : trim((string) ($_GET['q'] ?? ''));
 $modoCc = strtolower(trim((string) ($_GET['modo'] ?? 'simple')));
 if (!in_array($modoCc, ['simple', 'detalle'], true)) {
     $modoCc = 'simple';
@@ -58,6 +62,7 @@ $resumen = [
 $ultimoPeriodoPagado = null;
 $cuotasPendientes = [];
 $error = null;
+$fePorPago = [];
 
 if ($alumnoId > 0) {
     $stAlumno = $pdo->prepare('SELECT id, codigo_legacy, nombre_completo, documento, activo FROM alumnos WHERE id = ?');
@@ -73,6 +78,16 @@ if ($alumnoId > 0) {
         }
 
         [$movimientos, $resumen] = cc_build_movimientos($pdo, $alumnoId, $modoCc);
+        if (!$esPortalAlumno && fe_schema_ok($pdo)) {
+            $pagoIdsCc = [];
+            foreach ($movimientos as $mCc) {
+                $pidCc = (int) ($mCc['pago_id'] ?? 0);
+                if ($pidCc > 0 && (float) ($mCc['haber'] ?? 0) > 0.00001) {
+                    $pagoIdsCc[] = $pidCc;
+                }
+            }
+            $fePorPago = fe_estados_por_pagos($pdo, $pagoIdsCc);
+        }
         if ((int) ($alumno['activo'] ?? 0) === 1) {
             recalcular_saldo_alumnos($pdo, $alumnoId);
         }
@@ -91,15 +106,17 @@ if ($error !== null) {
     flash_err($error);
 }
 
-echo '<form method="get" class="search-form">';
-echo '<div class="search-title">Buscar alumno</div>';
-echo '<div class="search-input-row">';
-echo '<input name="q" value="' . h($buscar) . '" placeholder="Nombre, DNI o código legacy (ej: Perez, 32123456, 1502)" required>';
-echo '<button type="submit" class="search-submit" aria-label="Buscar alumno">Buscar</button>';
-echo '</div>';
-echo '</form>';
+if (!$esPortalAlumno) {
+    echo '<form method="get" class="search-form">';
+    echo '<div class="search-title">Buscar alumno</div>';
+    echo '<div class="search-input-row">';
+    echo '<input name="q" value="' . h($buscar) . '" placeholder="Nombre, DNI o código legacy (ej: Perez, 32123456, 1502)" required>';
+    echo '<button type="submit" class="search-submit" aria-label="Buscar alumno">Buscar</button>';
+    echo '</div>';
+    echo '</form>';
+}
 
-if ($alumnoId <= 0 && $buscar !== '') {
+if (!$esPortalAlumno && $alumnoId <= 0 && $buscar !== '') {
     if (count($coincidencias) === 0) {
         echo '<p class="muted">Sin resultados para la búsqueda.</p>';
     } else {
@@ -237,6 +254,16 @@ if ($alumno) {
                     . '&pago_id=' . $pid . '" target="_blank" rel="noopener" title="Imprimir recibo">🖨️</a>';
                 echo ' <a class="action-icon" href="registrar_cobro.php?alumno_id=' . (int) $alumnoId
                     . '&pago_id=' . $pid . '#recibo" title="Ver detalle del cobro">🧾</a>';
+                $feCc = $fePorPago[$pid] ?? null;
+                if ($feCc !== null && ($feCc['estado'] ?? '') === 'autorizado') {
+                    echo ' <a class="action-icon action-icon-fe" href="imprimir_factura_electronica.php?pago_id=' . $pid
+                        . '" target="_blank" rel="noopener" title="Imprimir factura electrónica ARCA">'
+                        . '<span class="action-icon-fe-label" aria-hidden="true">FE</span></a>';
+                } elseif ($feCc !== null && ($feCc['estado'] ?? '') === 'sin_fe' && !$esPortalAlumno) {
+                    echo ' <a class="action-icon action-icon-fe action-icon-fe-pendiente" href="factura_electronica.php?pago_id=' . $pid
+                        . '" title="Emitir factura electrónica">'
+                        . '<span class="action-icon-fe-label" aria-hidden="true">+FE</span></a>';
+                }
             }
             echo '</td></tr>';
         }

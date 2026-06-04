@@ -2,12 +2,15 @@
 declare(strict_types=1);
 
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
-require_once dirname(__DIR__) . '/src/Db.php';
+require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
+require_once dirname(__DIR__) . '/src/ParametrosFe.php';
+require_once dirname(__DIR__) . '/src/InstitutoLogo.php';
 
 $dbOk = false;
-$dbError = '';
+$nombreInstituto = trim((string) ($config['app']['name'] ?? 'Instituto'));
+$logoInstitutoUrl = null;
 $stats = [
     'alumnos' => 0,
     'alumnos_activos' => 0,
@@ -19,15 +22,38 @@ $estadoCuotas = ['pendiente' => 0, 'parcial' => 0, 'pagada' => 0];
 $cobrosPorMes = [];
 $meses = [1 => 'Ene', 2 => 'Feb', 3 => 'Mar', 4 => 'Abr', 5 => 'May', 6 => 'Jun', 7 => 'Jul', 8 => 'Ago', 9 => 'Sep', 10 => 'Oct', 11 => 'Nov', 12 => 'Dic'];
 try {
-    $pdo = Db::pdo($config);
+    $pdo = web_init($config);
     $pdo->query('SELECT 1');
     $dbOk = true;
+
+    $emisor = fe_emisor_cargar($pdo, $config);
+    $nombreInstituto = trim((string) ($emisor['nombre_fantasia'] ?? ''));
+    if ($nombreInstituto === '') {
+        $nombreInstituto = trim((string) ($emisor['razon_social'] ?? ''));
+    }
+    if ($nombreInstituto === '') {
+        $nombreInstituto = trim((string) ($config['app']['name'] ?? 'Instituto'));
+    }
+    $logoInstitutoUrl = instituto_logo_url($pdo);
 
     $stats['alumnos'] = (int) $pdo->query('SELECT COUNT(*) FROM alumnos')->fetchColumn();
     $stats['alumnos_activos'] = (int) $pdo->query('SELECT COUNT(*) FROM alumnos WHERE activo = 1')->fetchColumn();
     $stats['articulos'] = (int) $pdo->query('SELECT COUNT(*) FROM articulos WHERE activo = 1')->fetchColumn();
     $stats['cuotas_pendientes'] = (int) $pdo->query("SELECT COUNT(*) FROM cuota_mensual WHERE estado IN ('pendiente','parcial')")->fetchColumn();
-    $stCobroMes = $pdo->query('SELECT COALESCE(SUM(importe), 0) FROM pago_registrado WHERE YEAR(fecha_pago) = YEAR(CURDATE()) AND MONTH(fecha_pago) = MONTH(CURDATE())');
+    $filtroAnul = '';
+    try {
+        require_once dirname(__DIR__) . '/src/PagoAnulacion.php';
+        if (pago_anulacion_schema_ok($pdo)) {
+            $filtroAnul = ' AND ' . pago_sql_solo_vigentes();
+        }
+    } catch (Throwable $e) {
+        $filtroAnul = '';
+    }
+    $stCobroMes = $pdo->query(
+        'SELECT COALESCE(SUM(importe), 0) FROM pago_registrado
+         WHERE YEAR(fecha_pago) = YEAR(CURDATE()) AND MONTH(fecha_pago) = MONTH(CURDATE())'
+        . $filtroAnul
+    );
     $stats['cobros_mes'] = (float) $stCobroMes->fetchColumn();
 
     $stEstado = $pdo->query("SELECT estado, COUNT(*) c FROM cuota_mensual GROUP BY estado");
@@ -41,7 +67,8 @@ try {
     $stMes = $pdo->query('
         SELECT YEAR(fecha_pago) anio, MONTH(fecha_pago) mes, COALESCE(SUM(importe), 0) total
         FROM pago_registrado
-        WHERE fecha_pago >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        WHERE fecha_pago >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)'
+        . $filtroAnul . '
         GROUP BY YEAR(fecha_pago), MONTH(fecha_pago)
         ORDER BY YEAR(fecha_pago), MONTH(fecha_pago)
     ');
@@ -52,12 +79,19 @@ try {
     }
 } catch (Throwable $e) {
     $dbError = $e->getMessage();
+    error_log('index.php DB: ' . $dbError);
 }
 
 layout_start($config, 'Inicio');
 ?>
-<h1><?= h($config['app']['name']) ?></h1>
-<p class="muted">Dashboard operativo basado en SYStabon: estado general, cobranzas y navegación rápida por íconos.</p>
+<header class="inicio-brand">
+<?php if ($logoInstitutoUrl !== null) { ?>
+    <div class="inicio-logo-wrap instituto-logo-wrap">
+        <img src="<?= h($logoInstitutoUrl) ?>" alt="" class="instituto-logo-print inicio-logo" width="220" height="80">
+    </div>
+<?php } ?>
+    <h1><?= h($nombreInstituto) ?></h1>
+</header>
 
 <section class="dashboard-grid">
     <article class="kpi"><div class="kpi-label">Alumnos activos</div><div class="kpi-value"><?= number_format($stats['alumnos_activos'], 0, ',', '.') ?></div></article>
@@ -73,16 +107,12 @@ layout_start($config, 'Inicio');
         <a class="qa-item" href="alumnos.php" title="Alumnos"><span class="qa-icon">👥</span><span class="qa-label">Alumnos</span></a>
         <a class="qa-item" href="cuenta_corriente.php" title="Cuenta corriente"><span class="qa-icon">💳</span><span class="qa-label">Cta Cte</span></a>
         <a class="qa-item" href="registrar_cobro.php" title="Registrar cobro"><span class="qa-icon">💵</span><span class="qa-label">Cobro</span></a>
-        <a class="qa-item" href="ajuste_debe.php" title="Cargar debe manual"><span class="qa-icon">📝</span><span class="qa-label">Debe</span></a>
+        <a class="qa-item" href="caja.php" title="Caja del día: movimientos, arqueo y cerrar hoy"><span class="qa-icon">🏧</span><span class="qa-label">Caja del día</span></a>
+        <a class="qa-item" href="caja_cierres.php" title="Consultar días de caja ya cerrados"><span class="qa-icon">📒</span><span class="qa-label">Historial de cierres</span></a>
+        <a class="qa-item" href="ajuste_debe.php" title="Carga manual"><span class="qa-icon">📝</span><span class="qa-label">Carga Manual</span></a>
         <a class="qa-item" href="articulos.php" title="Artículos"><span class="qa-icon">📦</span><span class="qa-label">Artículos</span></a>
         <a class="qa-item" href="conceptos_alumno.php" title="Conceptos"><span class="qa-icon">✅</span><span class="qa-label">Conceptos</span></a>
-        <a class="qa-item" href="generar_cuotas.php" title="Cuotas"><span class="qa-icon">🧾</span><span class="qa-label">Cuotas</span></a>
-        <a class="qa-item" href="barrios.php" title="Barrios"><span class="qa-icon">📍</span><span class="qa-label">Barrios</span></a>
-        <a class="qa-item" href="rubros.php" title="Rubros"><span class="qa-icon">🗂️</span><span class="qa-label">Rubros</span></a>
-        <a class="qa-item" href="parametros_cobranza.php" title="Parámetros de cobranza"><span class="qa-icon">⚙️</span><span class="qa-label">Cobranza</span></a>
-        <a class="qa-item" href="formas_pago.php" title="Formas de pago"><span class="qa-icon">💳</span><span class="qa-label">Medios</span></a>
-        <a class="qa-item" href="tarjetas.php" title="Tarjetas"><span class="qa-icon">🏦</span><span class="qa-label">Tarjetas</span></a>
-        <a class="qa-item" href="feriados.php" title="Feriados"><span class="qa-icon">📅</span><span class="qa-label">Feriados</span></a>
+        <a class="qa-item" href="generar_cuotas.php" title="Generar cuotas"><span class="qa-icon">🧾</span><span class="qa-label">Generar cuotas</span></a>
     </div>
 </section>
 
@@ -96,16 +126,9 @@ layout_start($config, 'Inicio');
         <canvas id="chartCobrosMes" class="chart-canvas" width="520" height="220"></canvas>
     </article>
 </section>
-
-<section class="card">
-    <h2>Base de datos</h2>
-    <?php if ($dbOk): ?>
-        <p class="ok">Conexión correcta.</p>
-    <?php else: ?>
-        <p class="err">No se pudo conectar: <?= h($dbError) ?></p>
-    <?php endif; ?>
-    <p>Esquema base: <code>sql/init/01_schema.sql</code> + extensión <code>sql/init/04_schema_modo_operativo.sql</code>.</p>
-</section>
+<?php if (!$dbOk) { ?>
+<p class="err">No se pudo conectar con la base de datos. Si el problema continúa, contacte al administrador del sistema.</p>
+<?php } ?>
 
 <script>
 (() => {

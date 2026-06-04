@@ -70,6 +70,16 @@ Copiar este bloque por cada proceso (P-01, P-02, etc.).
 - P-08 Cierre caja
 - P-09 Morosos/deuda
 
+#### Idea futura (transferencias — acordado mar-2026, no implementar aún)
+
+**Transferencias “pendientes de acreditación” antes de impactar caja**
+
+- Caso de uso: se registra recibo con transferencia en fecha X; días después se verifica que **no impactó** en el banco → anulación.
+- Problema actual: el ingreso entra en caja al confirmar el cobro; si el día ya cerró, la anulación revierte CC/cuotas pero el cierre impreso conserva el histórico (correcto); el ingreso deja de sumar en totales operativos.
+- Mejora posible: estado intermedio del cobro (ej. `pendiente_acreditacion`) para medios bancarios (transferencia, cheque) que **no genere movimiento de caja** hasta confirmación explícita (“acreditada en banco”).
+- Beneficio: evita falsos ingresos en cierre de caja y reduce necesidad de anulaciones tardías por transferencias inexistentes.
+- Relacionado con: anulación de recibos (`37_pago_anulacion`), `caja_registrar_egreso_por_anulacion` (egreso solo si caja del día del cobro abierta).
+
 ### Ola 3 (madurez y mejora)
 - P-07 Electronica definitiva (nuevo enfoque)
 - P-10 Reportes avanzados
