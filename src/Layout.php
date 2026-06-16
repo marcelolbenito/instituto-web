@@ -102,6 +102,7 @@ function nav_main(): void
     $isAdmin = $navUser !== null && ($navUser['rol'] ?? '') === 'admin';
     if ($isAdmin) {
         $utilitarios[] = ['reparar_cc_incrementos.php', 'Reparar CC (contramovimientos)', '🔧'];
+        $utilitarios[] = ['activar_postitulo.php', 'Activar postítulo (Excel)', '🎓'];
     }
 
     $isActiveGroup = static function (array $items, string $currentPath): bool {

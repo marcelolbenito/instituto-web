@@ -32,6 +32,7 @@ const AUTH_SECRETARIA_DENIED = [
     'tarjetas.php',
     'feriados.php',
     'reparar_cc_incrementos.php',
+    'activar_postitulo.php',
 ];
 
 function auth_session_start(): void

@@ -34,7 +34,15 @@ Fila 3 = encabezados; datos desde fila 4.
 - [ ] Excel validado (111 filas en el listado actual; DNIs únicos).
 - [ ] Migración `21` aplicada (`tipo_alumno`, rango postgrado en parámetros).
 
-### Ejecución por SSH (PHP — recomendado)
+### Ejecución desde el navegador (recomendado en servidor sin PHP CLI)
+
+1. Subir `public/activar_postitulo.php`, `src/ActivarPostituloExcel.php`, `src/XlsxMinimal.php` y el Excel en la raíz.
+2. Ingresar como **administrador**.
+3. **Utilitarios → Activar postítulo (Excel)** (o abrir `activar_postitulo.php`).
+4. Revisar la vista previa en pantalla.
+5. Marcar confirmación y **Aplicar activación**.
+
+### Ejecución por SSH (PHP CLI)
 
 Subir por FTP:
 
