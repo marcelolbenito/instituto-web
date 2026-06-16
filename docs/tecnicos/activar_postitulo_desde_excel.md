@@ -1,7 +1,8 @@
 # Activar postítulo / postgrado desde Excel
 
 Archivo de ejemplo: `LISTADO COMPLETO POSTITULO.xlsx`  
-Script: `tools/activar_postitulo_excel.py`
+Script: `tools/activar_postitulo_excel.php` (PHP, recomendado en servidor)  
+Alternativa: `tools/activar_postitulo_excel.py` (requiere Python + openpyxl)
 
 ## Columnas del Excel
 
@@ -33,7 +34,34 @@ Fila 3 = encabezados; datos desde fila 4.
 - [ ] Excel validado (111 filas en el listado actual; DNIs únicos).
 - [ ] Migración `21` aplicada (`tipo_alumno`, rango postgrado en parámetros).
 
-### Ejecución por SSH (servidor con FTP + MariaDB en host)
+### Ejecución por SSH (PHP — recomendado)
+
+Subir por FTP:
+
+- `tools/activar_postitulo_excel.php`
+- `src/ActivarPostituloExcel.php`
+- `src/XlsxMinimal.php`
+- `LISTADO COMPLETO POSTITULO.xlsx`
+
+Usa la misma conexión que la app (`config/config.php` o variables de entorno del `bootstrap.php`). **No requiere Python ni pip.**
+
+```bash
+cd /ruta/instituto-web
+
+# Backup
+mariadb-dump -h 127.0.0.1 -u TU_USUARIO -p TU_BASE > backup_postitulo_$(date +%Y%m%d).sql
+
+php tools/activar_postitulo_excel.php --dry-run
+php tools/activar_postitulo_excel.php --yes
+```
+
+Ruta custom del Excel:
+
+```bash
+php tools/activar_postitulo_excel.php --excel="/ruta/LISTADO COMPLETO POSTITULO.xlsx" --dry-run
+```
+
+### Ejecución por SSH (Python, alternativa)
 
 Subir por FTP:
 
