@@ -10,6 +10,8 @@ require_once dirname(__DIR__) . '/src/Saldos.php';
 
 $pdo = web_init($config);
 $hasTipoAlumno = db_has_column($pdo, 'alumnos', 'tipo_alumno');
+$hasContactoAlumno = db_has_column($pdo, 'alumnos', 'email')
+    && db_has_column($pdo, 'alumnos', 'telefono_whatsapp');
 
 try {
     $pdo->query('SELECT condicion_iva, saldo_cc FROM alumnos LIMIT 1');
@@ -99,6 +101,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $nombre = trim((string) ($_POST['nombre_completo'] ?? ''));
         $direccion = trim((string) ($_POST['direccion'] ?? ''));
         $documento = trim((string) ($_POST['documento'] ?? '')) ?: null;
+        $email = null;
+        $telefonoWhatsapp = null;
+        if ($hasContactoAlumno) {
+            $emailNorm = normalize_email($_POST['email'] ?? null);
+            if ($emailNorm === false) {
+                $q = $id ? ('id=' . $id . '&') : '';
+                header('Location: alumnos.php?' . $q . 'err=' . rawurlencode('Email inválido.'));
+                exit;
+            }
+            $email = $emailNorm;
+            $telNorm = normalize_telefono_whatsapp($_POST['telefono_whatsapp'] ?? null);
+            if ($telNorm === false) {
+                $q = $id ? ('id=' . $id . '&') : '';
+                header('Location: alumnos.php?' . $q . 'err=' . rawurlencode('Teléfono WhatsApp inválido (use solo dígitos, + opcional).'));
+                exit;
+            }
+            $telefonoWhatsapp = $telNorm;
+        }
         $condicion = (string) ($_POST['condicion_iva'] ?? 'consumidor_final');
         if (!isset($condiciones[$condicion])) {
             $condicion = 'consumidor_final';
@@ -139,8 +159,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         try {
             if ($id > 0) {
-                $sql = 'UPDATE alumnos SET codigo_legacy = ?, nombre_completo = ?, direccion = ?, documento = ?,
-                  condicion_iva = ?, cuit = ?, fecha_ingreso = ?, fecha_inactivacion = ?, estado_cuenta = ?,
+                $sql = 'UPDATE alumnos SET codigo_legacy = ?, nombre_completo = ?, direccion = ?, documento = ?, '
+                    . ($hasContactoAlumno ? 'email = ?, telefono_whatsapp = ?, ' : '')
+                    . 'condicion_iva = ?, cuit = ?, fecha_ingreso = ?, fecha_inactivacion = ?, estado_cuenta = ?,
                   observaciones = ?, orden_referencia = ?, hace_factura = ?, curso = ?, '
                     . ($hasTipoAlumno ? 'tipo_alumno = ?, ' : '')
                     . 'barrio_id = ?, provincia = ?, ciudad = ?, activo = ?
@@ -148,26 +169,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $st = $pdo->prepare($sql);
                 $params = [
                     $codigoLegacy, $nombre, $direccion ?: null, $documento,
+                ];
+                if ($hasContactoAlumno) {
+                    $params[] = $email;
+                    $params[] = $telefonoWhatsapp;
+                }
+                $params = array_merge($params, [
                     $condicion, $cuit, $fechaIngSql, $fechaInaSql, $estadoCuenta,
                     $observaciones, $ordenRef, $haceFactura, $curso,
-                ];
+                ]);
                 if ($hasTipoAlumno) {
                     $params[] = $tipoAlumno;
                 }
                 $params = array_merge($params, [$barrioId, $provincia, $ciudad, $activo, $id]);
                 $st->execute($params);
             } else {
-                $sql = 'INSERT INTO alumnos (codigo_legacy, nombre_completo, direccion, documento, condicion_iva, cuit,
+                $sql = 'INSERT INTO alumnos (codigo_legacy, nombre_completo, direccion, documento, '
+                    . ($hasContactoAlumno ? 'email, telefono_whatsapp, ' : '')
+                    . 'condicion_iva, cuit,
                   fecha_ingreso, fecha_inactivacion, estado_cuenta, observaciones, orden_referencia, hace_factura, curso, '
-                  . ($hasTipoAlumno ? 'tipo_alumno, ' : '')
-                  . 'barrio_id, provincia, ciudad, activo)
-                  VALUES (' . ($hasTipoAlumno ? '?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?' : '?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?') . ')';
+                    . ($hasTipoAlumno ? 'tipo_alumno, ' : '')
+                    . 'barrio_id, provincia, ciudad, activo)
+                  VALUES (' . ($hasContactoAlumno && $hasTipoAlumno ? '?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?' :
+                    ($hasContactoAlumno ? '?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?' :
+                    ($hasTipoAlumno ? '?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?' : '?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?'))) . ')';
                 $st = $pdo->prepare($sql);
                 $params = [
                     $codigoLegacy, $nombre, $direccion ?: null, $documento,
+                ];
+                if ($hasContactoAlumno) {
+                    $params[] = $email;
+                    $params[] = $telefonoWhatsapp;
+                }
+                $params = array_merge($params, [
                     $condicion, $cuit, $fechaIngSql, $fechaInaSql, $estadoCuenta,
                     $observaciones, $ordenRef, $haceFactura, $curso,
-                ];
+                ]);
                 if ($hasTipoAlumno) {
                     $params[] = $tipoAlumno;
                 }
@@ -358,6 +395,13 @@ echo '</select></label>';
 echo '<label>Provincia <input name="provincia" maxlength="80" value="' . h($row['provincia'] ?? '') . '"></label>';
 echo '<label>Ciudad <input name="ciudad" maxlength="80" value="' . h($row['ciudad'] ?? '') . '"></label>';
 echo '<label>Documento <input name="documento" maxlength="20" value="' . h($row['documento'] ?? '') . '"></label>';
+if ($hasContactoAlumno) {
+    echo '<label>Email <input name="email" type="email" maxlength="120" autocomplete="email" placeholder="alumno@ejemplo.com" value="' . h($row['email'] ?? '') . '"></label>';
+    echo '<label>Teléfono WhatsApp <input name="telefono_whatsapp" type="tel" maxlength="40" inputmode="tel" autocomplete="tel" placeholder="+54911..." value="' . h($row['telefono_whatsapp'] ?? '') . '"></label>';
+    echo '<p class="muted" style="grid-column:1/-1;margin:-0.25rem 0 0.5rem">Para futuras notificaciones por email o WhatsApp. Opcional.</p>';
+} else {
+    echo '<p class="warn" style="grid-column:1/-1">Ejecutá <code>sql/migracion/38_alumnos_contacto_compat.sql</code> para habilitar email y WhatsApp.</p>';
+}
 echo '<label>Condición IVA <select name="condicion_iva">';
 foreach ($condiciones as $k => $lab) {
     $sel = ($row['condicion_iva'] ?? 'consumidor_final') === $k ? ' selected' : '';
@@ -402,7 +446,11 @@ if ($filtrarRegularidad && count($selectedReg) === 0) {
 $listadoCount = 0;
 echo '<h2>Listado</h2>';
 echo '<p class="muted" id="alumnos-listado-resumen"></p>';
-echo '<table class="table js-data-table"><thead><tr><th>Id</th><th>Legacy</th><th>Nombre</th><th>Barrio</th><th>Saldo</th><th>Último pago</th><th>Regularidad</th><th>Obs.</th><th data-nosort="1"></th></tr></thead><tbody>';
+echo '<table class="table js-data-table"><thead><tr><th>Id</th><th>Legacy</th><th>Nombre</th>';
+if ($hasContactoAlumno) {
+    echo '<th>Email</th><th>WhatsApp</th>';
+}
+echo '<th>Barrio</th><th>Saldo</th><th>Último pago</th><th>Regularidad</th><th>Obs.</th><th data-nosort="1"></th></tr></thead><tbody>';
 foreach ($rows as $r) {
     $isActive = (int) ($r['activo'] ?? 0) === 1;
     $saldo = (float) ($r['saldo_cc'] ?? 0);
@@ -453,6 +501,12 @@ foreach ($rows as $r) {
     }
     $listadoCount++;
     echo '<tr><td>' . (int) $r['id'] . '</td><td>' . h((string) ($r['codigo_legacy'] ?? '')) . '</td><td>' . h($r['nombre_completo']) . '</td>';
+    if ($hasContactoAlumno) {
+        $mail = trim((string) ($r['email'] ?? ''));
+        $wa = trim((string) ($r['telefono_whatsapp'] ?? ''));
+        echo '<td>' . ($mail !== '' ? h($mail) : '<span class="muted">—</span>') . '</td>';
+        echo '<td>' . ($wa !== '' ? h($wa) : '<span class="muted">—</span>') . '</td>';
+    }
     echo '<td>' . h($r['barrio_nombre'] ?? '') . '</td><td>$ ' . number_format($saldo, 2, ',', '.') . '</td>';
     echo '<td>' . h($ultimoPagoTxt) . '</td><td><span class="badge ' . h($badgeClass) . '">' . h($badgeLabel) . '</span></td>';
     if ($esHeredado) {

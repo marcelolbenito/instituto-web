@@ -27,6 +27,33 @@ function cuit_ok(?string $digits): bool
     return strlen($digits) === 11;
 }
 
+/** Email en minúsculas; vacío = null; inválido = false. */
+function normalize_email(?string $raw): string|null|false
+{
+    $s = trim((string) ($raw ?? ''));
+    if ($s === '') {
+        return null;
+    }
+    $s = strtolower($s);
+
+    return filter_var($s, FILTER_VALIDATE_EMAIL) !== false ? $s : false;
+}
+
+/** Teléfono WhatsApp: dígitos con + opcional al inicio; vacío = null; inválido = false. */
+function normalize_telefono_whatsapp(?string $raw): string|null|false
+{
+    $s = trim((string) ($raw ?? ''));
+    if ($s === '') {
+        return null;
+    }
+    $s = preg_replace('/[\s\-().]/', '', $s) ?? '';
+    if ($s === '' || strlen($s) > 40 || !preg_match('/^\+?\d+$/', $s)) {
+        return false;
+    }
+
+    return $s;
+}
+
 /**
  * Verifica si existe una columna en una tabla (cacheado por request).
  */
