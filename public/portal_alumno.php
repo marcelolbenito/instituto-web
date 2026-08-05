@@ -99,7 +99,6 @@ if ($hasContactoAlumno) {
         . h((string) ($alumno['email'] ?? '')) . '"></label>';
     echo '<label>Teléfono WhatsApp <input name="telefono_whatsapp" type="tel" maxlength="40" inputmode="tel" autocomplete="tel" placeholder="+54911..." value="'
         . h((string) ($alumno['telefono_whatsapp'] ?? '')) . '"></label>';
-    echo '<p class="muted" style="grid-column:1/-1;margin:0">Opcional. Deje vacío si no desea informarlo.</p>';
     echo '<div class="form-actions"><button type="submit" class="btn-primary">Guardar contacto</button></div>';
     echo '</form></section>';
 }

@@ -70,7 +70,7 @@ echo '<p class="muted">Revoca un cobro web: reabre cuotas, desvincula obligacion
 echo '<p><a href="informes_recibos.php">Resumen de recibos</a> · <a href="registrar_cobro.php">Registrar cobro</a></p>';
 
 if (!$schemaOk) {
-    echo '<p class="err">Ejecutá <code>sql/migracion/37_pago_anulacion_compat.sql</code> en la base de datos.</p>';
+    echo '<p class="err">La anulación de recibos no está disponible. Contacte al administrador del sistema.</p>';
     layout_end();
     return;
 }
