@@ -7,6 +7,7 @@ require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/Auth.php';
 require_once dirname(__DIR__) . '/src/Saldos.php';
+require_once dirname(__DIR__) . '/src/UsuarioAlumno.php';
 
 $pdo = web_init($config);
 $hasTipoAlumno = db_has_column($pdo, 'alumnos', 'tipo_alumno');
@@ -43,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     if ($action === 'recalc_saldos') {
         recalcular_saldo_alumnos($pdo);
-        $corte = saldo_corte_desde();
+        $corte = saldo_corte_desde($pdo);
         $msg = $corte !== null
             ? ('Saldos recalculados (desde ' . $corte . ').')
             : 'Saldos recalculados (histórico completo).';
@@ -74,6 +75,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  fecha_inactivacion = NULL
              WHERE id = ?"
         )->execute([$id]);
+        if (usuario_alumno_schema_ok($pdo)) {
+            usuario_alumno_ensure($pdo, $id);
+        }
         $nom = trim((string) ($al['nombre_completo'] ?? ''));
         header(
             'Location: alumnos.php?activo=activos&ok='
@@ -220,7 +224,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: alumnos.php?err=' . rawurlencode('Error al guardar: ' . $e->getMessage()));
             exit;
         }
-        header('Location: alumnos.php?ok=1');
+        $savedId = $id > 0 ? $id : (int) $pdo->lastInsertId();
+        $okMsg = 'Guardado correctamente.';
+        if ($savedId > 0 && usuario_alumno_schema_ok($pdo)) {
+            $uRes = usuario_alumno_ensure($pdo, $savedId);
+            if ($uRes['ok'] && !empty($uRes['created'])) {
+                $okMsg .= ' Usuario portal creado (DNI / contraseña inicial = DNI).';
+            } elseif (!$uRes['ok'] && $activo === 1) {
+                $okMsg .= ' Usuario portal: ' . $uRes['msg'];
+            }
+        }
+        header('Location: alumnos.php?ok=' . rawurlencode($okMsg));
         exit;
     }
 }
@@ -264,6 +278,14 @@ $joinDebeAjuste = $hasCcAjusteDebe
     : '';
 $exprDebeAjuste = $hasCcAjusteDebe ? 'COALESCE(da.debe_ajuste, 0)' : '0';
 
+$fechaCorteListado = saldo_corte_desde($pdo);
+$ultimoPagoCorte = '';
+$paramsListado = [];
+if ($fechaCorteListado !== null) {
+    $ultimoPagoCorte = ' WHERE fecha_pago >= ?';
+    $paramsListado[] = $fechaCorteListado;
+}
+
 $sql = '
     SELECT
         a.*,
@@ -275,7 +297,7 @@ $sql = '
      LEFT JOIN barrios b ON b.id = a.barrio_id
      LEFT JOIN (
        SELECT alumno_id, MAX(fecha_pago) AS ultimo_pago
-       FROM pago_registrado
+       FROM pago_registrado' . $ultimoPagoCorte . '
        GROUP BY alumno_id
      ) up ON up.alumno_id = a.id
      LEFT JOIN (
@@ -301,7 +323,9 @@ $sql = '
      ' . $whereActivo . '
      ORDER BY a.nombre_completo
 ';
-$rows = $pdo->query($sql)->fetchAll();
+$stListado = $pdo->prepare($sql);
+$stListado->execute($paramsListado);
+$rows = $stListado->fetchAll();
 
 $regAllowed = ['regular', 'riesgo', 'irregular', 'sin_pagos', 'no_activo'];
 $regModo = (string) ($_GET['reg_modo'] ?? '');

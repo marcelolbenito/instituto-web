@@ -7,6 +7,7 @@ require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/Auth.php';
 require_once dirname(__DIR__) . '/src/UsuariosSchema.php';
+require_once dirname(__DIR__) . '/src/UsuarioAlumno.php';
 
 $pdo = web_init($config);
 auth_require_admin();
@@ -15,6 +16,7 @@ $userCol = $uCols['user'];
 $passCol = $uCols['pass'];
 $hasNombre = $uCols['has_nombre'];
 $hasAlumnoId = $uCols['has_alumno_id'];
+$provisionReport = null;
 
 $vincularAlumno = static function (int $usuarioId, string $rol, int $alumnoIdPost) use ($pdo, $hasAlumnoId): void {
     if (!$hasAlumnoId) {
@@ -27,7 +29,14 @@ $vincularAlumno = static function (int $usuarioId, string $rol, int $alumnoIdPos
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     auth_require_write();
     $action = (string) ($_POST['action'] ?? '');
-    if ($action === 'save') {
+    if ($action === 'provisionar_alumnos') {
+        $confirm = (string) ($_POST['confirmar_provision'] ?? '') === '1';
+        if (!$confirm) {
+            header('Location: usuarios.php?err=' . rawurlencode('Confirmá la creación masiva de usuarios portal.'));
+            exit;
+        }
+        $provisionReport = usuario_alumno_provisionar_activos($pdo);
+    } elseif ($action === 'save') {
         $id = (int) ($_POST['id'] ?? 0);
         $username = trim((string) ($_POST['login'] ?? ''));
         $nombre = $hasNombre ? trim((string) ($_POST['nombre_completo'] ?? '')) : $username;
@@ -166,12 +175,36 @@ echo '<ul>';
 echo '<li><span class="badge badge-info">Administrador</span> — acceso completo, parámetros y esta pantalla.</li>';
 echo '<li><span class="badge badge-ok">Secretaría</span> — cobros, caja, archivos e informes; sin utilitarios ni usuarios.</li>';
 echo '<li><span class="badge badge-muted">Consulta</span> — solo lectura: alumnos, cuenta corriente e informes.</li>';
-echo '<li><span class="badge badge-warn">Alumno (portal)</span> — solo su ficha y CC; ingreso por DNI: <em>próximamente</em>.</li>';
+echo '<li><span class="badge badge-warn">Alumno (portal)</span> — solo su ficha y CC; ingreso con <strong>DNI</strong> (usuario y contraseña inicial = mismo DNI).</li>';
 echo '</ul>';
+if ($hasAlumnoId) {
+    echo '<p class="muted">Al guardar un alumno activo se crea o actualiza su usuario portal automáticamente. Para alumnos ya cargados, use el botón de abajo.</p>';
+}
 echo '</div>';
+
+if ($provisionReport !== null) {
+    echo '<div class="flash ok" role="status">';
+    echo '<p><strong>Provision portal alumnos</strong></p>';
+    echo '<ul>';
+    echo '<li>Creados: ' . (int) $provisionReport['creados'] . '</li>';
+    echo '<li>Actualizados: ' . (int) $provisionReport['actualizados'] . '</li>';
+    echo '<li>Omitidos / error: ' . (int) $provisionReport['omitidos'] . '</li>';
+    echo '</ul>';
+    if (!empty($provisionReport['errores'])) {
+        echo '<details><summary>Detalle de omitidos (hasta 20)</summary><ul class="muted">';
+        foreach (array_slice($provisionReport['errores'], 0, 20) as $e) {
+            echo '<li>' . h($e) . '</li>';
+        }
+        echo '</ul></details>';
+    }
+    echo '</div>';
+}
 
 echo '<div class="toolbar">';
 echo '<button type="button" class="btn-secondary" data-open-modal="usuario-modal">Nuevo usuario</button>';
+if ($hasAlumnoId) {
+    echo ' <button type="button" class="btn-secondary" data-open-modal="provision-alumnos-modal">Crear usuarios portal (alumnos activos)</button>';
+}
 if ($edit) {
     echo ' <span class="muted">Editando: <strong>' . h((string) ($edit['login_user'] ?? '')) . '</strong></span>';
     echo ' <a class="btn-secondary" href="usuarios.php">Cancelar edición</a>';
@@ -228,6 +261,23 @@ echo '<div class="form-actions"><button type="submit">Guardar</button></div>';
 echo '</form></div></dialog>';
 if ($edit) {
     echo '<span data-auto-open="usuario-modal"></span>';
+}
+
+if ($hasAlumnoId) {
+    echo '<dialog id="provision-alumnos-modal" class="app-modal"><div class="app-modal-content">';
+    echo '<div class="app-modal-head"><h3>Usuarios portal para alumnos activos</h3>';
+    echo '<button type="button" class="app-modal-close" data-close-modal="provision-alumnos-modal">Cerrar</button></div>';
+    echo '<form method="post" class="form">';
+    echo '<input type="hidden" name="action" value="provisionar_alumnos">';
+    echo '<p>Crea o actualiza un usuario <strong>alumno</strong> por cada ficha activa con DNI válido.</p>';
+    echo '<ul class="muted">';
+    echo '<li>Usuario = DNI (solo números)</li>';
+    echo '<li>Contraseña inicial = mismo DNI (solo en cuentas nuevas o re-vinculadas)</li>';
+    echo '<li>No modifica usuarios de staff que ya usen ese DNI</li>';
+    echo '</ul>';
+    echo '<label class="checkbox"><input type="checkbox" name="confirmar_provision" value="1" required> Confirmo crear/actualizar usuarios portal</label>';
+    echo '<div class="form-actions"><button type="submit">Ejecutar</button></div>';
+    echo '</form></div></dialog>';
 }
 
 echo '<h2>Usuarios registrados</h2>';

@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/XlsxMinimal.php';
 require_once __DIR__ . '/util.php';
+require_once __DIR__ . '/UsuarioAlumno.php';
 
 /**
  * Activa alumnos postgrado/postítulo desde Excel (col A=articulo_id, D=DNI).
@@ -181,6 +182,9 @@ final class ActivarPostituloExcel
                 $alumnoId = (int) $row['alumno_id'];
                 $articuloId = (int) $row['articulo_id'];
                 $stUp->execute([$alumnoId, $row['dni']]);
+                if (usuario_alumno_schema_ok($pdo)) {
+                    usuario_alumno_ensure($pdo, $alumnoId);
+                }
                 if ((int) ($row['activo_antes'] ?? 0) !== 1) {
                     $activados++;
                 }
