@@ -153,9 +153,8 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
         $modoCc = 'simple';
     }
 
-    $fechaCorte = saldo_corte_desde();
+    $fechaCorte = saldo_corte_desde($pdo);
     $vistaOperativa = $modoCc === 'simple';
-    $anioOperativo = cobranza_anio_operativo_desde();
     $hasFormasPagoCc = formas_pago_schema_ok($pdo);
     $usaComponentesPago = db_has_column($pdo, 'pago_registrado', 'importe_capital')
         && db_has_column($pdo, 'pago_registrado', 'importe_interes')
@@ -183,7 +182,7 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
          ) pa ON pa.cuota_id = cm.id
          WHERE cm.alumno_id = ?';
     if ($vistaOperativa) {
-        $sqlCuotas .= ' AND cm.anio >= ' . (int) $anioOperativo;
+        $sqlCuotas .= operativo_sql_filtro_cuota($pdo, 'cm');
     }
     $stCuotas = $pdo->prepare($sqlCuotas);
     $stCuotas->execute([$alumnoId]);
@@ -214,7 +213,7 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
              WHERE alumno_id = ?
                AND ABS(COALESCE(debe, 0)) > 0.005';
         if ($vistaOperativa) {
-            $desdeAdj = $fechaCorte ?? sprintf('%d-01-01', $anioOperativo);
+            $desdeAdj = $fechaCorte ?? sprintf('%d-01-01', cobranza_anio_operativo_desde($pdo));
             $sqlAdj .= ' AND (pago_id IS NULL OR fecha_mov >= ? OR referencia LIKE \'RECIBO_INC:%\' OR referencia LIKE \'RECIBO_DEC:%\')';
         } else {
             $sqlAdj .= ' AND (pago_id IS NULL OR referencia LIKE \'RECIBO_INC:%\' OR referencia LIKE \'RECIBO_DEC:%\')';
@@ -222,7 +221,7 @@ function cc_build_movimientos(PDO $pdo, int $alumnoId, string $modoCc = 'simple'
         $stAdj = $pdo->prepare($sqlAdj);
         $paramsAdj = [$alumnoId];
         if ($vistaOperativa) {
-            $paramsAdj[] = $desdeAdj ?? sprintf('%d-01-01', $anioOperativo);
+            $paramsAdj[] = $desdeAdj ?? sprintf('%d-01-01', cobranza_anio_operativo_desde($pdo));
         }
         $stAdj->execute($paramsAdj);
         foreach ($stAdj->fetchAll(PDO::FETCH_ASSOC) as $aj) {

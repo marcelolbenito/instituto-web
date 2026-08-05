@@ -6,6 +6,8 @@ require_once dirname(__DIR__) . '/src/web_init.php';
 require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/Cobranza.php';
+require_once dirname(__DIR__) . '/src/OperativoCobranza.php';
+require_once dirname(__DIR__) . '/src/Postitulo.php';
 require_once dirname(__DIR__) . '/src/Saldos.php';
 require_once dirname(__DIR__) . '/src/FormasPago.php';
 require_once dirname(__DIR__) . '/src/ReciboHtml.php';
@@ -212,7 +214,8 @@ function cobro_normalizar_items($rawIds, $rawCantidades): array
 }
 
 $pdo = web_init($config);
-$fechaCorteCobro = saldo_corte_desde();
+$fechaCorteCobro = saldo_corte_desde($pdo);
+$operativoCfg = operativo_resumen_config($pdo);
 
 $hasPacDetalle = db_has_column($pdo, 'pago_aplica_cuota', 'importe_capital')
     && db_has_column($pdo, 'pago_aplica_cuota', 'importe_recargo')
@@ -385,13 +388,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                       AND ar_b.activo = 1
                       AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
                 ) AS tiene_beca,
-                ' . cobranza_sql_select_articulos_beca_detalle() . '
+                ' . cobranza_sql_select_articulos_beca_detalle() . postitulo_sql_select_cols($pdo, 'cm') . '
          FROM cuota_mensual cm
          ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
-         ' . cobranza_sql_join_legacy_haber_por_periodo() . '
+         ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
          WHERE cm.alumno_id = ? AND cm.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')
            AND cm.estado <> \'anulada\'
-           AND cm.anio >= ' . (int) cobranza_anio_operativo_desde() . '
+           ' . operativo_sql_filtro_cuota($pdo, 'cm') . '
            AND ' . cobranza_sql_expr_saldo_impago() . ' > 0.005'
         );
         $stCu->execute(array_merge([$alumnoId], array_map('intval', $ids)));
@@ -863,7 +866,6 @@ if ($alumnoId > 0) {
         $param['fechas_feriado'] = cobro_fechas_feriado($pdo, (string) ($alumno['provincia'] ?? ''), (string) ($alumno['ciudad'] ?? ''));
         $tieneBecaAlumno = cobranza_alumno_tiene_beca($pdo, $alumnoId);
         $articulosBecaLabelAlumno = cobranza_alumno_articulos_beca_label($pdo, $alumnoId);
-        $anioOp = cobranza_anio_operativo_desde();
         $sqlPend = 'SELECT
                 cm.*,
                 COALESCE(pa.aplicado, 0) AS aplicado_acum,
@@ -877,7 +879,7 @@ if ($alumnoId > 0) {
                       AND ar_b.activo = 1
                       AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
                 ) AS tiene_beca,
-                ' . cobranza_sql_select_articulos_beca_detalle() . ',
+                ' . cobranza_sql_select_articulos_beca_detalle() . postitulo_sql_select_cols($pdo, 'cm') . ',
                 STR_TO_DATE(CONCAT(cm.anio, "-", LPAD(cm.mes, 2, "0"), "-01"), "%Y-%m-%d") AS fecha_mov,
                 CASE
                     WHEN COALESCE(cm.importe_original, 0) > 0
@@ -886,13 +888,12 @@ if ($alumnoId > 0) {
                 END AS debe_cc
              FROM cuota_mensual cm
              ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
-             ' . cobranza_sql_join_legacy_haber_por_periodo() . '
+             ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
              WHERE cm.alumno_id = ?
                AND cm.estado <> \'anulada\'
-               AND cm.anio >= ' . (int) $anioOp . '
+               ' . operativo_sql_filtro_cuota($pdo, 'cm') . '
                AND ' . cobranza_sql_expr_saldo_impago() . ' > 0.005';
         $paramsPend = [$alumnoId];
-        // Cobro no usa SALDO_CORTE_DESDE: el corte es para CC/legacy; acá solo anio operativo (2026+).
         $sqlPend .= ' ORDER BY cm.anio, cm.mes';
         $stC = $pdo->prepare($sqlPend);
         $stC->execute($paramsPend);
@@ -917,7 +918,7 @@ if ($alumnoId > 0) {
                       AND ar_b.activo = 1
                       AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
                 ) AS tiene_beca,
-                ' . cobranza_sql_select_articulos_beca_detalle() . ',
+                ' . cobranza_sql_select_articulos_beca_detalle() . postitulo_sql_select_cols($pdo, 'cm') . ',
                 STR_TO_DATE(CONCAT(cm.anio, "-", LPAD(cm.mes, 2, "0"), "-01"), "%Y-%m-%d") AS fecha_mov,
                 CASE
                     WHEN COALESCE(cm.importe_original, 0) > 0
@@ -926,10 +927,10 @@ if ($alumnoId > 0) {
                 END AS debe_cc
              FROM cuota_mensual cm
              ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
-             ' . cobranza_sql_join_legacy_haber_por_periodo() . '
+             ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
              WHERE cm.alumno_id = ?
                AND cm.estado <> \'anulada\'
-               AND cm.anio >= ' . (int) $anioOp . '
+               ' . operativo_sql_filtro_cuota($pdo, 'cm') . '
                AND ' . cobranza_sql_expr_saldo_impago() . ' <= 0.005';
         $paramsLiq = [$alumnoId];
         $sqlLiq .= ' ORDER BY cm.anio, cm.mes';
@@ -961,13 +962,13 @@ if ($alumnoId > 0) {
                                   AND ar_b.activo = 1
                                   AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
                             ) AS tiene_beca,
-                            ' . cobranza_sql_select_articulos_beca_detalle() . '
+                            ' . cobranza_sql_select_articulos_beca_detalle() . postitulo_sql_select_cols($pdo, 'cm') . '
                      FROM cuota_mensual cm
                      ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
-                     ' . cobranza_sql_join_legacy_haber_por_periodo() . '
+                     ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
                      WHERE cm.alumno_id = ? AND cm.id IN (' . $placeholders . ')
                        AND cm.estado <> \'anulada\'
-                       AND cm.anio >= ' . (int) cobranza_anio_operativo_desde() . '
+                       ' . operativo_sql_filtro_cuota($pdo, 'cm') . '
                        AND ' . cobranza_sql_expr_saldo_impago() . ' > 0.005
                      ORDER BY cm.anio, cm.mes'
                     );
@@ -1119,19 +1120,19 @@ if ($alumnoId > 0 && !$alumno) {
     echo ' · saldo ref.: <strong>$ ' . number_format((float) ($alumno['saldo_cc'] ?? 0), 2, ',', '.') . '</strong>';
     echo ' <span class="student-actions"><a class="action-icon" href="cuenta_corriente.php?alumno_id=' . (int) $alumnoId . '" title="Ver cuenta corriente del mismo alumno">💳</a></span></p>';
 
-        $anioOpUi = (int) cobranza_anio_operativo_desde();
+        $operativoEtiqueta = $operativoCfg['etiqueta'];
         $hayCuotasPend = count($cuotasPendientes) > 0;
         $hayConceptosPend = $hasCobroItems && count($ajustesPendientes) > 0;
         $hayAlgoPend = $hayCuotasPend || $hayConceptosPend;
 
         echo '<section class="card cobro-card cobro-card-primary">';
-        echo '<h2 class="cobro-section-title" style="margin-top:0">1) Cuotas y conceptos con saldo (desde ' . $anioOpUi . ')</h2>';
+        echo '<h2 class="cobro-section-title" style="margin-top:0">1) Cuotas y conceptos con saldo (desde ' . h($operativoEtiqueta) . ')</h2>';
         echo '<p class="muted" style="margin-bottom:0.5rem">Marcá lo que vas a cobrar y pulsá <strong>Calcular importes</strong>. '
             . 'Las cuotas mensuales pueden llevar descuento o recargo según la <strong>fecha del recibo</strong> de arriba.</p>';
         echo '<details class="cobro-ayuda" style="margin:0 0 1rem;font-size:0.92rem">';
         echo '<summary style="cursor:pointer;color:#163d74;font-weight:600">Ayuda rápida (marcas y períodos)</summary>';
         echo '<ul class="muted" style="margin:0.5rem 0 0 1.1rem;line-height:1.45">';
-        echo '<li>Se muestran obligaciones desde el año <strong>' . $anioOpUi . '</strong> con saldo pendiente.</li>';
+        echo '<li>Se muestran obligaciones desde <strong>' . h($operativoEtiqueta) . '</strong> con saldo pendiente.</li>';
         echo '<li><strong>Cuota mensual</strong>: abono del mes; el importe puede cambiar al calcular (pronto pago / mora).</li>';
         echo '<li><strong>Obligación vencida</strong>: deuda en cuenta corriente (ej. inscripción); aplica pronto pago / mora como la cuota del mes de la fecha del movimiento.</li>';
         echo '<li><strong>Debe manual</strong>: cargado en <a href="ajuste_debe.php?alumno_id=' . (int) $alumnoId . '">Cargar debe manual</a> (importe fijo, sin recargo).</li>';
@@ -1159,7 +1160,7 @@ if ($alumnoId > 0 && !$alumno) {
         echo '<th>Total estimado <span class="muted" style="font-weight:400">(fecha recibo ' . h($fechaPago) . ')</span></th><th>Notas</th>';
         echo '</tr></thead><tbody>';
         if (!$hayAlgoPend) {
-            echo '<tr><td colspan="7" class="muted">No hay cuotas ni conceptos con saldo desde ' . $anioOpUi . '. '
+            echo '<tr><td colspan="7" class="muted">No hay cuotas ni conceptos con saldo desde ' . h($operativoEtiqueta) . '. '
                 . 'Si el alumno pagó todo, revisá <em>Cuotas ya pagadas</em> abajo.</td></tr>';
         } else {
             foreach ($cuotasPendientes as $c) {
@@ -1176,6 +1177,14 @@ if ($alumnoId > 0 && !$alumno) {
                 $estVis = cobranza_estado_visual_cobro_html($c);
                 if ($estVis !== '' && $estVis !== '—') {
                     $notasCuota .= ($notasCuota !== '' ? ' ' : '') . $estVis;
+                }
+                if (!empty($prevCuota['es_postitulo'])) {
+                    $vp = trim((string) ($c['fecha_vencimiento_postitulo'] ?? ''));
+                    $vpTs = $vp !== '' ? strtotime($vp) : false;
+                    $vpTxt = $vpTs !== false ? ' (vence ' . date('d/m/Y', $vpTs) . ')' : '';
+                    $badgePost = '<span class="badge" style="background:#efe6f7;color:#5a2d82">Postítulo · sin descuento'
+                        . h($vpTxt) . '</span>';
+                    $notasCuota .= ($notasCuota !== '' ? ' ' : '') . $badgePost;
                 }
                 echo '<tr>';
                 echo '<td><input type="checkbox" name="cuota_sel[]" value="' . (int) $c['id'] . '"' . $chk . '></td>';
@@ -1285,7 +1294,7 @@ if ($alumnoId > 0 && !$alumno) {
 
         echo '<div class="toolbar" style="margin-top:1rem"><button type="button" class="btn-secondary" data-open-modal="modal-liquidaciones">Cuotas ya pagadas (consulta)</button></div>';
         echo '<dialog id="modal-liquidaciones" class="app-modal"><div class="app-modal-content">';
-        echo '<div class="app-modal-head"><h3>Cuotas ya pagadas desde ' . $anioOpUi . '</h3>';
+        echo '<div class="app-modal-head"><h3>Cuotas ya pagadas desde ' . h($operativoEtiqueta) . '</h3>';
         echo '<button type="button" class="app-modal-close" data-close-modal="modal-liquidaciones">Cerrar</button></div>';
         echo '<p class="muted">Solo lectura: períodos sin saldo pendiente. Marca <strong>L</strong> = liquidada. No se cobran desde acá.</p>';
         echo '<div style="overflow-x:auto;max-height:60vh">';

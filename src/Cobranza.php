@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/OperativoCobranza.php';
+require_once __DIR__ . '/Postitulo.php';
+
 /**
  * N-ésimo día hábil (lun–vie) desde una fecha inclusive.
  * El día inicial cuenta como intento 1 si es hábil; si no, se avanza hasta el primer hábil.
@@ -85,21 +88,6 @@ function cobranza_dias_mora_calendario(DateTimeImmutable $fechaTopePronto, DateT
         return 0;
     }
     return (int) $inicioMora->diff($fechaPago)->days + 1;
-}
-
-/**
- * Año mínimo de cuotas en cobranza operativa (solo períodos desde aquí).
- * Variable de entorno OPERATIVO_ANIO_DESDE (ej. 2026); por defecto 2026.
- */
-function cobranza_anio_operativo_desde(): int
-{
-    $raw = getenv('OPERATIVO_ANIO_DESDE');
-    if ($raw === false || trim((string) $raw) === '') {
-        return 2026;
-    }
-    $y = (int) trim((string) $raw);
-
-    return $y >= 2000 && $y <= 2100 ? $y : 2026;
 }
 
 /**
@@ -211,7 +199,6 @@ function cobranza_ultimo_periodo_pagado(PDO $pdo, int $alumnoId): ?string
     if ($alumnoId <= 0) {
         return null;
     }
-    $anioOp = cobranza_anio_operativo_desde();
     $expr = cobranza_sql_expr_saldo_impago();
     $sql = '
         SELECT cm.anio, cm.mes
@@ -219,8 +206,8 @@ function cobranza_ultimo_periodo_pagado(PDO $pdo, int $alumnoId): ?string
         ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
         ' . cobranza_sql_join_legacy_haber_por_periodo() . "
         WHERE cm.alumno_id = ?
-          AND cm.anio >= {$anioOp}
           AND cm.estado <> 'anulada'
+          " . operativo_sql_filtro_cuota($pdo, 'cm') . "
           AND {$expr} <= 0.005
         ORDER BY cm.anio DESC, cm.mes DESC
         LIMIT 1
@@ -735,6 +722,32 @@ function cobranza_cuota_fecha_tope_pronto_desde_generacion(PDO $pdo, array $cuot
 }
 
 /**
+ * Tope/vencimiento efectivo de una cuota. Para postítulo usa el vencimiento propio
+ * del período (si está cargado); para el resto, el tope estándar por días hábiles.
+ *
+ * @param array<string,mixed> $cuota
+ * @param array<string,mixed> $param
+ */
+function cobranza_cuota_tope_efectivo(PDO $pdo, array $cuota, array $param): DateTimeImmutable
+{
+    $esPost = array_key_exists('es_postitulo', $cuota)
+        ? ((int) $cuota['es_postitulo'] === 1)
+        : postitulo_alumno_es($pdo, (int) ($cuota['alumno_id'] ?? 0));
+
+    if ($esPost) {
+        $venc = array_key_exists('fecha_vencimiento_postitulo', $cuota)
+            ? (string) ($cuota['fecha_vencimiento_postitulo'] ?? '')
+            : (string) (postitulo_vencimiento_periodo($pdo, (int) ($cuota['anio'] ?? 0), (int) ($cuota['mes'] ?? 0)) ?? '');
+        $venc = trim($venc);
+        if ($venc !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $venc) === 1) {
+            return new DateTimeImmutable($venc);
+        }
+    }
+
+    return cobranza_cuota_fecha_tope_pronto_desde_generacion($pdo, $cuota, $param);
+}
+
+/**
  * Cuota impaga y con tope de pronto pago vencido (para informe de morosos).
  */
 function cobranza_cuota_vencida_para_moroso(
@@ -747,7 +760,7 @@ function cobranza_cuota_vencida_para_moroso(
         return false;
     }
     $fechaRef = $fechaRef ?? new DateTimeImmutable('today');
-    $tope = cobranza_cuota_fecha_tope_pronto_desde_generacion($pdo, $cuota, $param);
+    $tope = cobranza_cuota_tope_efectivo($pdo, $cuota, $param);
 
     return $fechaRef > $tope;
 }
@@ -761,20 +774,19 @@ function cobranza_alumno_ids_con_cuotas_vencidas(PDO $pdo, ?DateTimeImmutable $f
 {
     $param = cobranza_cargar_parametros($pdo);
     $fechaRef = $fechaRef ?? new DateTimeImmutable('today');
-    $anioOp = cobranza_anio_operativo_desde();
     $expr = cobranza_sql_expr_saldo_impago();
     $sql = '
         SELECT cm.*,
                COALESCE(pa.aplicado, 0) AS aplicado_acum,
                COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-               ' . $expr . ' AS saldo_impago
+               ' . $expr . ' AS saldo_impago' . postitulo_sql_select_cols($pdo, 'cm') . '
         FROM cuota_mensual cm
         INNER JOIN alumnos al ON al.id = cm.alumno_id
         ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
-        ' . cobranza_sql_join_legacy_haber_por_periodo() . "
-        WHERE cm.anio >= {$anioOp}
-          AND cm.estado <> 'anulada'
+        ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . "
+        WHERE cm.estado <> 'anulada'
+          " . operativo_sql_filtro_cuota($pdo, 'cm') . "
           AND {$expr} > 0.005
     ";
     $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
@@ -800,7 +812,6 @@ function cobranza_alumno_ids_con_cuotas_vencidas(PDO $pdo, ?DateTimeImmutable $f
  */
 function cobranza_listar_cuotas_impagas(PDO $pdo, ?int $alumnoId = null): array
 {
-    $anioOp = cobranza_anio_operativo_desde();
     $expr = cobranza_sql_expr_saldo_impago();
     $sql = '
         SELECT cm.*,
@@ -811,8 +822,8 @@ function cobranza_listar_cuotas_impagas(PDO $pdo, ?int $alumnoId = null): array
         FROM cuota_mensual cm
         ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
         ' . cobranza_sql_join_legacy_haber_por_periodo() . "
-        WHERE cm.anio >= {$anioOp}
-          AND cm.estado <> 'anulada'
+        WHERE cm.estado <> 'anulada'
+          " . operativo_sql_filtro_cuota($pdo, 'cm') . "
           AND {$expr} > 0.005
     ";
     $params = [];
@@ -998,7 +1009,9 @@ function cobranza_calcular_linea_saldo(
     string $fechaPagoYmd,
     bool $tieneBeca = false,
     float $difBeca = 0.0,
-    string $articuloBecaDetalle = ''
+    string $articuloBecaDetalle = '',
+    bool $esPostitulo = false,
+    ?string $fechaVencimientoPostitulo = null
 ): array {
     $saldo = max(0.0, round($saldo, 2));
 
@@ -1014,6 +1027,18 @@ function cobranza_calcular_linea_saldo(
     $fechasFeriado = is_array($param['fechas_feriado'] ?? null) ? $param['fechas_feriado'] : [];
     $tope = cobranza_fecha_tope_pronto_pago($anio, $mes, $diasHabiles, $fechasFeriado);
     $topeBeca = cobranza_fecha_tope_pronto_pago($anio, $mes, 5, $fechasFeriado);
+
+    // Postítulo (artículos "POST."): nunca lleva descuento de pronto pago y su
+    // vencimiento es propio del período (se carga manualmente). Si no hay fecha
+    // cargada, se mantiene el tope estándar pero igualmente sin descuento.
+    if ($esPostitulo) {
+        $descFijo = 0.0;
+        $vencPost = trim((string) ($fechaVencimientoPostitulo ?? ''));
+        if ($vencPost !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $vencPost) === 1) {
+            $tope = new DateTimeImmutable($vencPost);
+        }
+    }
+
     $fp = new DateTimeImmutable($fechaPagoYmd);
     $dentro = $fp <= $tope;
     if ($difBeca <= 0.00001 && $tieneBeca && $abonoCompletoRef > 0.00001) {
@@ -1080,6 +1105,7 @@ function cobranza_calcular_linea_saldo(
         'importe_beca_perdida' => $impBecaPerdida,
         'importe_capital' => $capital,
         'total_linea' => $total,
+        'es_postitulo' => $esPostitulo,
         'importe_fijo_sin_mora' => false,
         'recargo_mensual_pct' => $recargoMensualPct,
         'coef_diario_pct' => round($coefDiario, 5),
@@ -1099,8 +1125,23 @@ function cobranza_calcular_linea_cuota(array $param, array $cuota, string $fecha
     $difBeca = max(0.0, (float) ($cuota['importe_diferencia_beca'] ?? 0));
     $tieneBeca = (int) ($cuota['tiene_beca'] ?? 0) === 1;
     $artBeca = trim((string) ($cuota['articulos_beca_detalle'] ?? ''));
+    $esPostitulo = (int) ($cuota['es_postitulo'] ?? 0) === 1;
+    $vencPostitulo = isset($cuota['fecha_vencimiento_postitulo']) && $cuota['fecha_vencimiento_postitulo'] !== null
+        ? (string) $cuota['fecha_vencimiento_postitulo']
+        : null;
 
-    return cobranza_calcular_linea_saldo($param, $anio, $mes, $saldo, $fechaPagoYmd, $tieneBeca, $difBeca, $artBeca);
+    return cobranza_calcular_linea_saldo(
+        $param,
+        $anio,
+        $mes,
+        $saldo,
+        $fechaPagoYmd,
+        $tieneBeca,
+        $difBeca,
+        $artBeca,
+        $esPostitulo,
+        $vencPostitulo
+    );
 }
 
 /**

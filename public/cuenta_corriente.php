@@ -22,7 +22,8 @@ $modoCc = strtolower(trim((string) ($_GET['modo'] ?? 'simple')));
 if (!in_array($modoCc, ['simple', 'detalle'], true)) {
     $modoCc = 'simple';
 }
-$fechaCorte = saldo_corte_desde();
+$fechaCorte = saldo_corte_desde($pdo);
+$operativoCfg = operativo_resumen_config($pdo);
 
 /**
  * Formatea importes en ARS y oculta ceros para lectura simple.
@@ -171,7 +172,7 @@ if ($alumno) {
     echo '</section>';
 
     if ($modoCc === 'simple' && count($movimientos) === 0) {
-        echo '<p class="muted">Sin movimientos del año operativo (' . (int) cobranza_anio_operativo_desde() . ') para este alumno.</p>';
+        echo '<p class="muted">Sin movimientos operativos (desde ' . h($operativoCfg['etiqueta']) . ') para este alumno.</p>';
     }
 
     echo '<p class="current-student"><strong>Alumno:</strong> ' . h($alumno['nombre_completo']);
@@ -195,7 +196,7 @@ if ($alumno) {
     if (count($movimientos) > 0) {
         $fechaEmision = date('d/m/Y H:i');
         $vistaTxt = $modoCc === 'simple'
-            ? 'Operativa · año ' . (int) cobranza_anio_operativo_desde()
+            ? 'Operativa · desde ' . $operativoCfg['etiqueta']
             : 'Detalle histórico';
         $appNombre = (string) ($config['app']['name'] ?? 'Instituto');
         $tituloPrint = 'Cuenta corriente — ' . (string) $alumno['nombre_completo'];

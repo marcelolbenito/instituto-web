@@ -5,6 +5,7 @@ require_once __DIR__ . '/util.php';
 require_once __DIR__ . '/RegularidadAlumno.php';
 require_once __DIR__ . '/Cobranza.php';
 require_once __DIR__ . '/PagoAnulacion.php';
+require_once __DIR__ . '/OperativoCobranza.php';
 
 /**
  * @param array{activo?: string, barrio_id?: int, min_saldo?: float, solo_morosos?: bool} $filtros
@@ -48,6 +49,13 @@ function informes_listar_alumnos(PDO $pdo, array $filtros = []): array
     $sqlWhere = $where !== [] ? (' WHERE ' . implode(' AND ', $where)) : '';
 
     $filtroPagoVigente = pago_anulacion_schema_ok($pdo) ? (' AND ' . pago_sql_solo_vigentes()) : '';
+    $fechaCorte = saldo_corte_desde($pdo);
+    $upParams = [];
+    $filtroCorte = '';
+    if ($fechaCorte !== null) {
+        $filtroCorte = ' AND fecha_pago >= ?';
+        $upParams[] = $fechaCorte;
+    }
     $sql = '
         SELECT
             a.id,
@@ -63,14 +71,14 @@ function informes_listar_alumnos(PDO $pdo, array $filtros = []): array
         LEFT JOIN (
             SELECT alumno_id, MAX(fecha_pago) AS ultimo_pago
             FROM pago_registrado
-            WHERE 1=1' . $filtroPagoVigente . '
+            WHERE 1=1' . $filtroPagoVigente . $filtroCorte . '
             GROUP BY alumno_id
         ) up ON up.alumno_id = a.id
         ' . $sqlWhere . '
         ORDER BY a.nombre_completo
     ';
     $st = $pdo->prepare($sql);
-    $st->execute($params);
+    $st->execute(array_merge($upParams, $params));
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     if (!is_array($rows)) {
         return [];

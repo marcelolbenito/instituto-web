@@ -5,18 +5,7 @@ declare(strict_types=1);
  * Recalcula y persiste saldo de cuenta corriente por alumno.
  * Usa la misma lógica que cuenta corriente (vista operativa / simple).
  */
-function saldo_corte_desde(): ?string
-{
-    $raw = trim((string) getenv('SALDO_CORTE_DESDE'));
-    if ($raw === '') {
-        return null;
-    }
-    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw) !== 1) {
-        return null;
-    }
-
-    return $raw;
-}
+require_once __DIR__ . '/OperativoCobranza.php';
 
 function recalcular_saldo_alumnos(\PDO $pdo, ?int $alumnoId = null, ?string $fechaCorte = null): int
 {
