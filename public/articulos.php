@@ -164,6 +164,18 @@ echo '<h1>Artículos / conceptos</h1>';
 echo '<p class="muted">Ficha alineada al modo operativo (Archivos → Artículos). Lista 1 = importe referencia. '
     . 'Los <strong>inactivos</strong> no se ofrecen en cobros ni en conceptos por alumno; el historial de cobros se conserva.</p>';
 
+echo '<div style="border:2px solid #d98a00;background:#fff7e6;border-radius:8px;padding:1rem 1.25rem;margin:1rem 0;font-size:1.12rem;line-height:1.55;color:#5c3d00">';
+echo '<strong style="font-size:1.2rem">⚠️ Importante — cómo nombrar los artículos</strong>';
+echo '<ul style="margin:0.6rem 0 0;padding-left:1.4rem">';
+echo '<li><strong>ABONO / CUOTA:</strong> escribí la palabra <strong>ABONO</strong> en el detalle y dejá marcado '
+    . 'el check <strong>«Es abono / cuota»</strong>. <span style="font-weight:400">(La cuota mensual se genera '
+    . 'cuando el artículo está asignado al alumno y activo, en <em>Generación de abonos</em>.)</span></li>';
+echo '<li><strong>POSTÍTULO:</strong> el detalle <strong>debe empezar con «POST.»</strong>. '
+    . 'Solo así el alumno se trata como postítulo: <strong>sin descuento de pronto pago</strong> y con '
+    . '<strong>vencimiento propio por mes</strong>.</li>';
+echo '</ul>';
+echo '</div>';
+
 $row = $edit ?: [];
 
 echo '<div class="toolbar"><button type="button" class="btn-secondary" data-open-modal="articulo-modal">Nuevo artículo</button></div>';
@@ -182,6 +194,9 @@ foreach ($rubros as $b) {
     echo '<option value="' . (int) $b['id'] . '"' . $sel . '>' . h($b['nombre']) . '</option>';
 }
 echo '</select></label>';
+echo '<p style="grid-column:1/-1;margin:0;font-size:1.02rem;font-weight:600;color:#5c3d00;background:#fff7e6;border:1px solid #e6c378;border-radius:6px;padding:0.55rem 0.75rem">'
+    . 'Recordá: para <strong>ABONO/CUOTA</strong> usá la palabra <strong>ABONO</strong> en el detalle y marcá «Es abono / cuota». '
+    . 'Para <strong>POSTÍTULO</strong> el detalle debe empezar con <strong>POST.</strong></p>';
 echo '<label>Detalle * <input name="detalle" required maxlength="200" value="' . h($row['detalle'] ?? '') . '"></label>';
 echo '<label>Tipo <select name="medida_venta">';
 foreach (['unidad' => 'Unidad', 'fraccion' => 'Fracción'] as $k => $lab) {
