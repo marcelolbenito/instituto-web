@@ -16,38 +16,60 @@ function instituto_logo_directorio_abs(): string
 }
 
 /**
- * Ruta relativa bajo public/ guardada en BD, o null si no hay logo.
+ * Ruta relativa bajo public/ si hay archivo logo.* en uploads/instituto.
  */
-function instituto_logo_path_desde_bd(PDO $pdo): ?string
+function instituto_logo_rel_desde_disco(?PDO $pdo = null, bool $registrarEnBd = true): ?string
 {
-    if (!instituto_logo_tabla_ok($pdo)) {
-        return null;
-    }
-    $row = fe_parametros_cargar($pdo);
-    if ($row === null) {
-        return null;
-    }
-    $rel = trim((string) ($row['logo_path'] ?? ''));
-    if ($rel === '' || str_contains($rel, '..')) {
+    $dir = instituto_logo_directorio_abs();
+    if (!is_dir($dir)) {
         return null;
     }
 
-    $abs = dirname(__DIR__) . '/public/' . str_replace('\\', '/', $rel);
-    if (!is_file($abs)) {
+    $files = array_values(array_filter(glob($dir . '/logo.*') ?: [], 'is_file'));
+    if ($files === []) {
         return null;
     }
 
-    return str_replace('\\', '/', $rel);
+    usort($files, static fn (string $a, string $b): int => filemtime($b) <=> filemtime($a));
+    $rel = 'uploads/instituto/' . basename($files[0]);
+
+    if ($registrarEnBd && $pdo !== null && instituto_logo_tabla_ok($pdo)) {
+        $pdo->prepare('UPDATE parametros_factura_electronica SET logo_path = ? WHERE id = 1')
+            ->execute([$rel]);
+    }
+
+    return $rel;
 }
 
 /**
- * URL web del logo (desde la raíz del sitio), o null.
+ * Ruta relativa bajo public/ guardada en BD o detectada en disco, o null si no hay logo.
+ */
+function instituto_logo_path_desde_bd(PDO $pdo): ?string
+{
+    if (instituto_logo_tabla_ok($pdo)) {
+        $row = fe_parametros_cargar($pdo);
+        if ($row !== null) {
+            $rel = trim((string) ($row['logo_path'] ?? ''));
+            if ($rel !== '' && !str_contains($rel, '..')) {
+                $abs = dirname(__DIR__) . '/public/' . str_replace('\\', '/', $rel);
+                if (is_file($abs)) {
+                    return str_replace('\\', '/', $rel);
+                }
+            }
+        }
+    }
+
+    return instituto_logo_rel_desde_disco($pdo);
+}
+
+/**
+ * URL web del logo (ruta relativa bajo public/), o null.
  */
 function instituto_logo_url(PDO $pdo): ?string
 {
     $rel = instituto_logo_path_desde_bd($pdo);
 
-    return $rel !== null ? '/' . ltrim($rel, '/') : null;
+    return $rel !== null ? ltrim(str_replace('\\', '/', $rel), '/') : null;
 }
 
 /**

@@ -53,8 +53,13 @@ $cssVer = is_file($cssPath) ? (string) filemtime($cssPath) : '1';
 </head>
 <body class="login-page">
 <div class="login-shell">
-    <aside class="login-brand" aria-hidden="true">
+    <aside class="login-brand">
         <div class="login-brand-inner">
+            <?php if ($logoUrl !== null) { ?>
+                <div class="login-brand-logo-wrap">
+                    <img src="<?= h($logoUrl) ?>" alt="" class="login-brand-logo">
+                </div>
+            <?php } ?>
             <p class="login-brand-eyebrow">Gestión de cuotas</p>
             <h1 class="login-brand-title"><?= $appTitle ?></h1>
             <p class="login-brand-tagline">Cobranzas, cuenta corriente y comprobantes en un solo panel.</p>
@@ -66,11 +71,11 @@ $cssVer = is_file($cssPath) ? (string) filemtime($cssPath) : '1';
             <header class="login-form-head">
                 <?php if ($logoUrl !== null) { ?>
                     <div class="login-logo-wrap">
-                        <img src="<?= h($logoUrl) ?>" alt="" class="instituto-logo-print login-logo" width="200" height="72">
+                        <img src="<?= h($logoUrl) ?>" alt="" class="instituto-logo-print login-logo">
                     </div>
                 <?php } ?>
                 <h2>Iniciar sesión</h2>
-                <p class="muted">Use el usuario asignado por el instituto.</p>
+                <p class="muted">Alumnos: usuario = DNI (solo números). Personal: usuario asignado por el instituto.</p>
             </header>
 
             <?php if (!$schemaOk) { ?>
@@ -90,6 +95,7 @@ $cssVer = is_file($cssPath) ? (string) filemtime($cssPath) : '1';
                     autocomplete="username"
                     autocapitalize="none"
                     spellcheck="false"
+                    placeholder="DNI o usuario"
                     required
                     autofocus
                     <?= $schemaOk ? '' : ' disabled' ?>

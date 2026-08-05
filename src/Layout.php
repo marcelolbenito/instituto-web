@@ -2,6 +2,8 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Auth.php';
+require_once __DIR__ . '/Db.php';
+require_once __DIR__ . '/InstitutoLogo.php';
 
 function layout_start(array $config, string $pageTitle = ''): void
 {
@@ -12,7 +14,15 @@ function layout_start(array $config, string $pageTitle = ''): void
     $cssPath = dirname(__DIR__) . '/public/assets/app.css';
     $cssVer = is_file($cssPath) ? (string) filemtime($cssPath) : '1';
     echo '<title>' . $title . '</title><link rel="stylesheet" href="assets/app.css?v=' . h($cssVer) . '"></head><body>';
-    nav_main();
+
+    $logoUrl = null;
+    try {
+        $logoUrl = instituto_logo_url(Db::pdo($config));
+    } catch (Throwable $e) {
+        $logoUrl = null;
+    }
+
+    nav_main($config, $logoUrl);
     echo '<main class="main">';
 }
 
@@ -44,10 +54,27 @@ function layout_render_nav_user_menu(): void
     echo '</details>';
 }
 
-function nav_main(): void
+function layout_render_brand(array $config, ?string $logoUrl, string $homeHref): void
+{
+    $appName = (string) ($config['app']['name'] ?? 'Instituto');
+    echo '<div class="brand">';
+    echo '<a href="' . h($homeHref) . '" class="brand-link" title="' . h($appName) . '">';
+    if ($logoUrl !== null && $logoUrl !== '') {
+        echo '<img src="' . h($logoUrl) . '" alt="" class="site-brand-logo">';
+        echo '<span class="sr-only">' . h($appName) . '</span>';
+    } else {
+        echo '<span class="brand-text">Instituto</span>';
+    }
+    echo '</a></div>';
+}
+
+function nav_main(array $config, ?string $logoUrl = null): void
 {
     $current = basename((string) ($_SERVER['SCRIPT_NAME'] ?? 'index.php'));
-    echo '<header class="site-header"><div class="brand"><a href="' . h(auth_is_alumno() ? 'portal_alumno.php' : 'index.php') . '">Instituto</a></div><nav class="nav nav-main nav-main-short">';
+    $homeHref = auth_is_alumno() ? 'portal_alumno.php' : 'index.php';
+    echo '<header class="site-header">';
+    layout_render_brand($config, $logoUrl, $homeHref);
+    echo '<nav class="nav nav-main nav-main-short">';
 
     if (auth_is_alumno()) {
         $navUser = auth_user();
@@ -97,6 +124,7 @@ function nav_main(): void
         ['formas_pago.php', 'Formas de pago', '💳'],
         ['tarjetas.php', 'Tarjetas y cuotas', '🏦'],
         ['feriados.php', 'Calendario de feriados', '📅'],
+        ['postitulo_vencimientos.php', 'Vencimientos de postítulo', '📆'],
     ];
     $navUser = auth_user();
     $isAdmin = $navUser !== null && ($navUser['rol'] ?? '') === 'admin';

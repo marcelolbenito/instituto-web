@@ -87,9 +87,10 @@ if ($emisorOk && count($faltanImp) > 0) {
 $logoUrl = $logoOk ? instituto_logo_url($pdo) : null;
 
 echo '<form method="post" class="form form-grid" enctype="multipart/form-data" style="max-width:48rem">';
-echo '<h2>Logo del instituto (impresiones)</h2>';
-echo '<p class="muted small">Se muestra en recibos, factura electrónica, cierre de caja y demás vistas de impresión. '
-    . 'Si no subís ninguno, no aparece nada.</p>';
+echo '<h2>Logo del instituto</h2>';
+echo '<p class="muted small">Se muestra en el encabezado del panel, login, recibos, factura electrónica, cierre de caja '
+    . 'y demás impresiones. También podés subir el archivo por FTP a '
+    . '<code>public/uploads/instituto/logo.jpg</code> (o <code>logo.jpeg</code>).</p>';
 if (!$logoOk) {
     echo '<p class="warn">Ejecute <code>sql/migracion/33_parametros_logo_instituto_compat.sql</code> para habilitar el logo.</p>';
 } else {

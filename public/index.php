@@ -87,7 +87,7 @@ layout_start($config, 'Inicio');
 <header class="inicio-brand">
 <?php if ($logoInstitutoUrl !== null) { ?>
     <div class="inicio-logo-wrap instituto-logo-wrap">
-        <img src="<?= h($logoInstitutoUrl) ?>" alt="" class="instituto-logo-print inicio-logo" width="220" height="80">
+        <img src="<?= h($logoInstitutoUrl) ?>" alt="" class="instituto-logo-print inicio-logo">
     </div>
 <?php } ?>
     <h1><?= h($nombreInstituto) ?></h1>
