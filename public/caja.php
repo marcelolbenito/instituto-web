@@ -80,6 +80,7 @@ $estaCerrada = $cierreDia !== null;
 $resumenPorMedio = $cajaOk && !$estaCerrada ? caja_resumen_por_medio($pdo, $fecha) : [];
 $arqueoGuardado = $cierreDia !== null ? caja_decodificar_arqueo($cierreDia) : null;
 $tieneArqueo = caja_arqueo_schema_ok($pdo);
+$reporteCaja = $cajaOk ? caja_datos_reporte_cierre($pdo, $fecha, $cierreDia) : ['formas_pago' => [], 'facturacion' => ['rangos' => [], 'cantidad_total' => 0]];
 
 $tsF = strtotime($fecha);
 $fechaTxt = $tsF !== false ? date('d/m/Y', $tsF) : $fecha;
@@ -246,10 +247,13 @@ echo '<div class="form-actions"><button type="submit">Registrar movimiento</butt
 }
 
 echo '<section class="card caja-cierre-card" id="caja-cierre-arqueo">';
-echo '<h2>Cierre y arqueo · ' . h($fechaTxt) . '</h2>';
+echo '<h2>Cierre, arqueo e informe · ' . h($fechaTxt) . '</h2>';
+echo '<p class="muted small">El informe de cierre incluye numeración de facturas (desde/hasta) y totales por medio de pago. '
+    . 'También está en <a href="caja_cierres.php">Informes → Cierre de caja</a>.</p>';
 
 if ($estaCerrada && $cierreDia !== null) {
     echo '<p class="muted">Este día ya está cerrado. Totales congelados al cierre.</p>';
+    caja_render_bloque_reporte($reporteCaja);
     if ($arqueoGuardado !== null && !empty($arqueoGuardado['medios'])) {
         $hayArqueoFilas = false;
         foreach ($arqueoGuardado['medios'] as $lin) {
@@ -285,7 +289,9 @@ if ($estaCerrada && $cierreDia !== null) {
         }
     }
     echo '<p class="form-actions" style="margin-top:0.75rem">';
-    echo '<a class="btn-secondary" href="imprimir_caja_cierre.php?fecha=' . h($fecha) . '" target="_blank" rel="noopener">🖨️ Imprimir cierre</a>';
+    echo '<a class="btn-secondary" href="imprimir_caja_cierre.php?fecha=' . h($fecha)
+        . '" target="_blank" rel="noopener">🖨️ Ver / imprimir informe de cierre</a> ';
+    echo '<a class="btn-secondary" href="caja_cierres.php">Listado de cierres</a>';
     echo '</p>';
     $difSaldo = abs((float) $cierreDia['saldo'] - $resumen['saldo']) > 0.02;
     $difCant = (int) $cierreDia['cantidad_movimientos'] !== (int) $resumen['cantidad'];
@@ -295,6 +301,7 @@ if ($estaCerrada && $cierreDia !== null) {
     }
 } elseif (caja_cierre_schema_ok($pdo)) {
     echo '<p class="muted caja-arqueo-help">Revisá la tabla de movimientos. Luego compará lo registrado con lo que tenés en caja, banco y vouchers.</p>';
+    caja_render_bloque_reporte($reporteCaja);
     echo '<form method="post" class="form caja-cerrar-block" id="form-cerrar-caja">';
     echo '<input type="hidden" name="action" value="cerrar">';
     echo '<input type="hidden" name="fecha" value="' . h($fecha) . '">';

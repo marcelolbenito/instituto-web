@@ -848,6 +848,32 @@ function cobranza_cuotas_pendientes_alumno(PDO $pdo, int $alumnoId): array
     return cobranza_listar_cuotas_impagas($pdo, $alumnoId);
 }
 
+/**
+ * Cuotas impagas fuera de plazo (detalle del informe de morosidad).
+ *
+ * @return list<array<string, mixed>>
+ */
+function cobranza_listar_cuotas_morosas(PDO $pdo, ?int $alumnoId = null, ?DateTimeImmutable $fechaRef = null): array
+{
+    $param = cobranza_cargar_parametros($pdo);
+    $fechaRef = $fechaRef ?? new DateTimeImmutable('today');
+    $out = [];
+    foreach (cobranza_listar_cuotas_impagas($pdo, $alumnoId) as $cuota) {
+        if (!cobranza_cuota_vencida_para_moroso($pdo, $cuota, $param, $fechaRef)) {
+            continue;
+        }
+        $tope = cobranza_cuota_tope_efectivo($pdo, $cuota, $param);
+        $cuota['fecha_tope'] = $tope->format('Y-m-d');
+        $cuota['dias_vencida'] = (int) $tope->diff($fechaRef)->format('%r%a');
+        if ($cuota['dias_vencida'] < 0) {
+            $cuota['dias_vencida'] = 0;
+        }
+        $out[] = $cuota;
+    }
+
+    return $out;
+}
+
 function cobranza_saldo_impago_cuota(array $cuota): float
 {
     $orig = (float) ($cuota['importe_original'] ?? 0);

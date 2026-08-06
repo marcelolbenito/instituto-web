@@ -181,3 +181,52 @@ function informes_recibos_medios(PDO $pdo): array
 
     return $out;
 }
+
+/**
+ * Totales vigentes agrupados por medio de pago (etiqueta legible).
+ *
+ * @param list<array<string, mixed>> $rows
+ * @return list<array{medio:string,cantidad:int,total:float}>
+ */
+function informes_totales_recibos_por_medio(array $rows): array
+{
+    $acc = [];
+    foreach ($rows as $r) {
+        if (!empty($r['anulado'])) {
+            continue;
+        }
+        $label = trim((string) ($r['medio_etiqueta'] ?? ''));
+        if ($label === '') {
+            $label = trim((string) ($r['medio'] ?? ''));
+        }
+        if ($label === '') {
+            $label = 'Sin medio';
+        }
+        if (!isset($acc[$label])) {
+            $acc[$label] = ['medio' => $label, 'cantidad' => 0, 'total' => 0.0];
+        }
+        $acc[$label]['cantidad']++;
+        $acc[$label]['total'] = round($acc[$label]['total'] + (float) ($r['importe'] ?? 0), 2);
+    }
+    $out = array_values($acc);
+    usort($out, static fn (array $a, array $b): int => strcmp($a['medio'], $b['medio']));
+
+    return $out;
+}
+
+/** Etiqueta amigable para códigos de medio en filtros de informe. */
+function informes_label_medio_codigo(string $codigo): string
+{
+    static $map = [
+        'efectivo' => 'Efectivo',
+        'transferencia' => 'Transferencia',
+        'debito' => 'Tarjeta de débito',
+        'tarjeta' => 'Tarjeta de crédito',
+        'cheque' => 'Cheque',
+        'otro' => 'Otro',
+        'cuenta_corriente' => 'Cuenta corriente',
+    ];
+    $c = strtolower(trim($codigo));
+
+    return $map[$c] ?? ($c !== '' ? ucfirst($c) : 'Sin medio');
+}

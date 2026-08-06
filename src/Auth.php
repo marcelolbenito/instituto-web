@@ -15,12 +15,19 @@ const AUTH_CONSULTA_PAGES = [
     'informes_saldos.php',
     'informes_morosos.php',
     'informes_recibos.php',
+    'informes_cobranza_mensual.php',
+    'informes_estado_cuenta.php',
+    'imprimir_estado_cuenta.php',
+    'caja_cierres.php',
+    'imprimir_caja_cierre.php',
 ];
 
 /** @var list<string> Pantallas del portal alumno (solo su ficha; login por DNI pendiente). */
 const AUTH_ALUMNO_PAGES = [
     'portal_alumno.php',
     'cuenta_corriente.php',
+    'informes_estado_cuenta.php',
+    'imprimir_estado_cuenta.php',
 ];
 
 /** @var list<string> */

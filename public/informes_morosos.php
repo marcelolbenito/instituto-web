@@ -7,14 +7,13 @@ require_once dirname(__DIR__) . '/src/util.php';
 require_once dirname(__DIR__) . '/src/Layout.php';
 require_once dirname(__DIR__) . '/src/InformesAlumnos.php';
 require_once dirname(__DIR__) . '/src/RegularidadAlumno.php';
-require_once dirname(__DIR__) . '/src/CuentaCorrienteMovimientos.php';
 require_once dirname(__DIR__) . '/src/Cobranza.php';
 
 $pdo = web_init($config);
 
-$vista = (string) ($_GET['vista'] ?? 'simplificado');
+$vista = (string) ($_GET['vista'] ?? 'detallado');
 if (!in_array($vista, ['simplificado', 'detallado'], true)) {
-    $vista = 'simplificado';
+    $vista = 'detallado';
 }
 $activo = (string) ($_GET['activo'] ?? 'activos');
 $barrioId = isset($_GET['barrio_id']) ? (int) $_GET['barrio_id'] : 0;
@@ -38,8 +37,54 @@ $rows = informes_listar_alumnos($pdo, [
 ]);
 $tot = informes_totales_saldo($rows);
 
+$mesesCortos = [
+    1 => 'Ene', 2 => 'Feb', 3 => 'Mar', 4 => 'Abr', 5 => 'May', 6 => 'Jun',
+    7 => 'Jul', 8 => 'Ago', 9 => 'Sep', 10 => 'Oct', 11 => 'Nov', 12 => 'Dic',
+];
+
 if ($export) {
     $csvRows = [];
+    if ($vista === 'detallado') {
+        foreach ($rows as $r) {
+            $aid = (int) ($r['id'] ?? 0);
+            $cuotas = cobranza_listar_cuotas_morosas($pdo, $aid);
+            if ($cuotas === []) {
+                $csvRows[] = [
+                    (string) ($r['codigo_legacy'] ?? ''),
+                    (string) ($r['nombre_completo'] ?? ''),
+                    (string) ($r['documento'] ?? ''),
+                    number_format((float) ($r['saldo_cc'] ?? 0), 2, '.', ''),
+                    '',
+                    '',
+                    '',
+                    '',
+                ];
+                continue;
+            }
+            foreach ($cuotas as $c) {
+                $anio = (int) ($c['anio'] ?? 0);
+                $mes = (int) ($c['mes'] ?? 0);
+                $periodo = sprintf('%04d-%02d', $anio, $mes);
+                $tsTope = strtotime((string) ($c['fecha_tope'] ?? ''));
+                $csvRows[] = [
+                    (string) ($r['codigo_legacy'] ?? ''),
+                    (string) ($r['nombre_completo'] ?? ''),
+                    (string) ($r['documento'] ?? ''),
+                    number_format((float) ($r['saldo_cc'] ?? 0), 2, '.', ''),
+                    $periodo,
+                    $tsTope !== false ? date('d/m/Y', $tsTope) : '',
+                    number_format((float) ($c['saldo_impago'] ?? cobranza_saldo_impago_cuota($c)), 2, '.', ''),
+                    (string) ((int) ($c['dias_vencida'] ?? 0)),
+                ];
+            }
+        }
+        informes_csv_salida(
+            'morosidad_detalle_' . date('Y-m-d') . '.csv',
+            ['Legacy', 'Alumno', 'DNI', 'Saldo CC', 'Período cuota', 'Vencimiento', 'Saldo cuota', 'Días vencida'],
+            $csvRows
+        );
+    }
+
     foreach ($rows as $r) {
         $reg = regularidad_clasificar(true, $r['ultimo_pago'] ?? null);
         $csvRows[] = [
@@ -51,7 +96,7 @@ if ($export) {
         ];
     }
     informes_csv_salida(
-        'morosos_' . $vista . '_' . date('Y-m-d') . '.csv',
+        'morosidad_' . $vista . '_' . date('Y-m-d') . '.csv',
         ['Legacy', 'Nombre', 'Saldo', 'Regularidad', 'Dias sin pago'],
         $csvRows
     );
@@ -59,15 +104,17 @@ if ($export) {
 
 $barrios = $pdo->query('SELECT id, nombre FROM barrios ORDER BY nombre')->fetchAll();
 
-layout_start($config, 'Morosos');
-echo '<h1>Listado de morosos</h1>';
+layout_start($config, 'Morosidad');
+echo '<h1>Informe · Morosidad</h1>';
 $paramMorosos = cobranza_cargar_parametros($pdo);
 $diasTopeMorosos = max(1, (int) ($paramMorosos['dias_habiles_tope_pronto_pago'] ?? 5));
-echo '<p class="muted">Alumnos con al menos una <strong>cuota mensual impaga</strong> cuyo plazo de pronto pago venció '
-    . '(<strong>' . $diasTopeMorosos . '° día hábil</strong> desde la fecha de generación de la cuota, según '
-    . '<a href="parametros_cobranza.php">Parámetros cobranza</a>; feriados nacionales). '
+echo '<p class="muted">Detalle de alumnos con <strong>cuotas mensuales pendientes de pago</strong> cuyo plazo de pronto pago ya venció '
+    . '(<strong>' . $diasTopeMorosos . '° día hábil</strong> desde la generación de la cuota, según '
+    . '<a href="parametros_cobranza.php">Parámetros de cobranza</a>). '
     . 'Vista ';
-echo $vista === 'detallado' ? '<strong>detallada</strong> (ítems abiertos de CC).' : '<strong>simplificada</strong>.';
+echo $vista === 'detallado'
+    ? '<strong>detallada</strong>: alumno + cada cuota pendiente (período, vencimiento y saldo).'
+    : '<strong>simplificada</strong>: un renglón por alumno.';
 echo '</p>';
 
 echo '<p class="nav-tabs">';
@@ -75,8 +122,10 @@ $qBase = ['activo' => $activo, 'barrio_id' => $barrioId > 0 ? $barrioId : null];
 if ($regFiltro !== []) {
     $qBase['reg'] = $regFiltro;
 }
-echo '<a class="' . ($vista === 'simplificado' ? 'is-active' : '') . '" href="informes_morosos.php?' . h(http_build_query($qBase + ['vista' => 'simplificado'])) . '">Simplificado</a> ';
-echo '<a class="' . ($vista === 'detallado' ? 'is-active' : '') . '" href="informes_morosos.php?' . h(http_build_query($qBase + ['vista' => 'detallado'])) . '">Detallado</a> ';
+echo '<a class="' . ($vista === 'detallado' ? 'is-active' : '') . '" href="informes_morosos.php?'
+    . h(http_build_query($qBase + ['vista' => 'detallado'])) . '">Detallado</a> ';
+echo '<a class="' . ($vista === 'simplificado' ? 'is-active' : '') . '" href="informes_morosos.php?'
+    . h(http_build_query($qBase + ['vista' => 'simplificado'])) . '">Simplificado</a> ';
 echo '<a href="informes_saldos.php">Saldo general</a>';
 echo '</p>';
 
@@ -123,8 +172,13 @@ echo '</section>';
 echo '<h2>Resultado</h2>';
 
 if ($vista === 'simplificado') {
+    if (count($rows) === 0) {
+        echo '<p class="muted">No hay alumnos morosos con los filtros elegidos.</p>';
+        layout_end();
+        return;
+    }
     echo '<table class="table js-data-table"><thead><tr>';
-    echo '<th>Legacy</th><th>Nombre</th><th>Barrio</th><th>Saldo</th><th>Días</th><th>Regularidad</th><th></th>';
+    echo '<th>Legacy</th><th>Alumno</th><th>Barrio</th><th>Saldo</th><th>Días</th><th>Regularidad</th><th></th>';
     echo '</tr></thead><tbody>';
     foreach ($rows as $r) {
         $reg = regularidad_clasificar((int) ($r['activo'] ?? 0) === 1, $r['ultimo_pago'] ?? null);
@@ -136,7 +190,7 @@ if ($vista === 'simplificado') {
         echo '<td class="num text-debe">$ ' . h(number_format($saldo, 2, ',', '.')) . '</td>';
         echo '<td>' . ($reg['dias'] !== null ? (int) $reg['dias'] : '—') . '</td>';
         echo '<td><span class="badge ' . h($reg['class']) . '">' . h($reg['label']) . '</span></td>';
-        echo '<td><a href="informes_morosos.php?vista=detallado&amp;alumno_id=' . (int) $r['id'] . '">Detalle</a> · ';
+        echo '<td><a href="informes_morosos.php?vista=detallado&amp;alumno_id=' . (int) $r['id'] . '">Cuotas</a> · ';
         echo '<a href="cuenta_corriente.php?alumno_id=' . (int) $r['id'] . '">CC</a></td>';
         echo '</tr>';
     }
@@ -149,10 +203,12 @@ if ($vista === 'simplificado') {
             $idsVenc = cobranza_alumno_ids_con_cuotas_vencidas($pdo);
             if (in_array($detalleId, $idsVenc, true)) {
                 $st = $pdo->prepare(
-                    'SELECT a.id, a.codigo_legacy, a.nombre_completo, a.saldo_cc, a.activo, b.nombre AS barrio_nombre, up.ultimo_pago
+                    'SELECT a.id, a.codigo_legacy, a.nombre_completo, a.saldo_cc, a.activo, a.documento,
+                            b.nombre AS barrio_nombre, up.ultimo_pago
                      FROM alumnos a
                      LEFT JOIN barrios b ON b.id = a.barrio_id
-                     LEFT JOIN (SELECT alumno_id, MAX(fecha_pago) AS ultimo_pago FROM pago_registrado GROUP BY alumno_id) up ON up.alumno_id = a.id
+                     LEFT JOIN (SELECT alumno_id, MAX(fecha_pago) AS ultimo_pago FROM pago_registrado GROUP BY alumno_id) up
+                       ON up.alumno_id = a.id
                      WHERE a.id = ?'
                 );
                 $st->execute([$detalleId]);
@@ -165,42 +221,56 @@ if ($vista === 'simplificado') {
         }
     }
 
+    if ($mostrar === []) {
+        echo '<p class="muted">No hay alumnos morosos con los filtros elegidos.</p>';
+        layout_end();
+        return;
+    }
+
     foreach ($mostrar as $r) {
         $aid = (int) ($r['id'] ?? 0);
         $saldo = (float) ($r['saldo_cc'] ?? 0);
         $reg = regularidad_clasificar((int) ($r['activo'] ?? 0) === 1, $r['ultimo_pago'] ?? null);
+        $cuotas = cobranza_listar_cuotas_morosas($pdo, $aid);
+        $deudaCuotas = 0.0;
+        foreach ($cuotas as $c) {
+            $deudaCuotas += (float) ($c['saldo_impago'] ?? cobranza_saldo_impago_cuota($c));
+        }
+
         echo '<section class="informe-detalle-block">';
         echo '<h2>' . h((string) ($r['nombre_completo'] ?? '')) . ' <span class="muted">#' . $aid . '</span></h2>';
         echo '<p>Saldo CC: <strong class="text-debe">$ ' . h(number_format($saldo, 2, ',', '.')) . '</strong> · ';
+        echo 'Cuotas vencidas: <strong class="text-debe">$ ' . h(number_format($deudaCuotas, 2, ',', '.')) . '</strong> · ';
         echo '<span class="badge ' . h($reg['class']) . '">' . h($reg['label']) . '</span> · ';
-        echo '<a href="cuenta_corriente.php?alumno_id=' . $aid . '">Cuenta corriente</a></p>';
+        echo '<a href="cuenta_corriente.php?alumno_id=' . $aid . '">Cuenta corriente</a> · ';
+        echo '<a href="registrar_cobro.php?alumno_id=' . $aid . '">Registrar cobro</a></p>';
 
-        [$movs, $resumenCc] = cc_build_movimientos($pdo, $aid, 'simple');
-        $abiertos = array_values(array_filter(
-            $movs,
-            static fn (array $m): bool => (float) ($m['debe'] ?? 0) > 0.009
-        ));
-        if ($abiertos === []) {
-            echo '<p class="muted">Sin ítems pendientes visibles en vista simple (revise cuenta corriente).</p>';
+        if ($cuotas === []) {
+            echo '<p class="muted">Sin cuotas vencidas visibles (revise cuenta corriente o el período operativo).</p>';
         } else {
-            echo '<table class="table table-compact"><thead><tr><th>Fecha</th><th>Concepto</th><th>Debe</th><th>Haber</th><th>Saldo</th></tr></thead><tbody>';
-            foreach ($abiertos as $m) {
+            echo '<table class="table table-compact"><thead><tr>';
+            echo '<th>Período</th><th>Vencimiento</th><th class="num">Saldo pendiente</th><th class="num">Días vencida</th><th>Estado</th>';
+            echo '</tr></thead><tbody>';
+            foreach ($cuotas as $c) {
+                $anio = (int) ($c['anio'] ?? 0);
+                $mes = (int) ($c['mes'] ?? 0);
+                $periodoTxt = ($mesesCortos[$mes] ?? (string) $mes) . ' ' . $anio;
+                $tsTope = strtotime((string) ($c['fecha_tope'] ?? ''));
+                $topeTxt = $tsTope !== false ? date('d/m/Y', $tsTope) : '—';
+                $saldoC = (float) ($c['saldo_impago'] ?? cobranza_saldo_impago_cuota($c));
                 echo '<tr>';
-                $fm = $m['fecha_mov'] ?? '';
-                $ts = $fm !== '' ? strtotime((string) $fm) : false;
-                echo '<td>' . h($ts !== false ? date('d/m/Y', $ts) : (string) $fm) . '</td>';
-                echo '<td>' . h((string) ($m['concepto'] ?? '')) . '</td>';
-                echo '<td class="num">$ ' . h(number_format((float) ($m['debe'] ?? 0), 2, ',', '.')) . '</td>';
-                echo '<td class="num">$ ' . h(number_format((float) ($m['haber'] ?? 0), 2, ',', '.')) . '</td>';
-                echo '<td class="num text-debe">$ ' . h(number_format((float) ($m['saldo_final'] ?? 0), 2, ',', '.')) . '</td>';
+                echo '<td>' . h($periodoTxt) . '</td>';
+                echo '<td>' . h($topeTxt) . '</td>';
+                echo '<td class="num text-debe">$ ' . h(number_format($saldoC, 2, ',', '.')) . '</td>';
+                echo '<td class="num">' . (int) ($c['dias_vencida'] ?? 0) . '</td>';
+                echo '<td>' . h((string) ($c['estado'] ?? '')) . '</td>';
                 echo '</tr>';
             }
-            echo '</tbody></table>';
+            echo '</tbody><tfoot><tr><th colspan="2">Total cuotas vencidas</th>';
+            echo '<td class="num text-debe"><strong>$ ' . h(number_format($deudaCuotas, 2, ',', '.')) . '</strong></td>';
+            echo '<td colspan="2"></td></tr></tfoot></table>';
         }
         echo '</section>';
-    }
-    if ($mostrar === []) {
-        echo '<p class="muted">No hay morosos con los filtros elegidos.</p>';
     }
 }
 layout_end();

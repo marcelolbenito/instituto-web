@@ -10,10 +10,11 @@ require_once dirname(__DIR__) . '/src/Caja.php';
 $pdo = web_init($config);
 $cierreOk = caja_cierre_schema_ok($pdo);
 
-layout_start($config, 'Cierres de caja');
-echo '<h1>Historial de cierres de caja</h1>';
-echo '<p class="muted">Cada fila es un día <strong>cerrado</strong> con totales congelados. '
-    . 'Para operar un día usá <a href="caja.php">Caja del día</a>.</p>';
+layout_start($config, 'Cierre de caja');
+echo '<h1>Informe · Cierre de caja</h1>';
+echo '<p class="muted">Reporte de cada día <strong>cerrado</strong>: totales, <strong>numeración de facturación (desde/hasta)</strong> '
+    . 'y <strong>totalización por medio de pago</strong> (efectivo, transferencia, débito, crédito y otros). '
+    . 'Para operar o cerrar un día usá <a href="caja.php">Caja del día</a>.</p>';
 
 if (!$cierreOk) {
     echo '<p class="err">Ejecutá <code>sql/migracion/28_caja_cierre.sql</code> (o <code>28_caja_cierre_compat.sql</code>).</p>';
@@ -38,7 +39,7 @@ if (count($abiertas) > 0) {
 
 $cierres = caja_listar_cierres($pdo, 120);
 if (count($cierres) === 0) {
-    echo '<p class="muted">Aún no hay cierres registrados.</p>';
+    echo '<p class="muted">Aún no hay cierres registrados. Cerrá un día desde <a href="caja.php">Caja del día</a> y después podrás imprimir el informe acá.</p>';
 } else {
     echo '<table class="table js-data-table">';
     $colArqueo = caja_arqueo_schema_ok($pdo);
@@ -46,7 +47,7 @@ if (count($cierres) === 0) {
     if ($colArqueo) {
         echo '<th class="num">Arqueo Δ</th>';
     }
-    echo '<th>Mov.</th><th data-nosort="1"></th></tr></thead><tbody>';
+    echo '<th>Mov.</th><th data-nosort="1">Informe</th></tr></thead><tbody>';
     foreach ($cierres as $c) {
         $f = (string) $c['fecha'];
         $tsF = strtotime($f);
@@ -54,7 +55,7 @@ if (count($cierres) === 0) {
         $tsC = strtotime((string) ($c['cerrado_en'] ?? ''));
         $txtC = $tsC !== false ? date('d/m/Y H:i', $tsC) : '';
         echo '<tr>';
-        echo '<td><a href="caja.php?fecha=' . h($f) . '">' . h($txtF) . '</a></td>';
+        echo '<td><a href="caja.php?fecha=' . h($f) . '" title="Ver caja del día">' . h($txtF) . '</a></td>';
         echo '<td>' . h($txtC) . '</td>';
         echo '<td class="num">$ ' . number_format((float) $c['ingresos'], 2, ',', '.') . '</td>';
         echo '<td class="num">$ ' . number_format((float) $c['egresos'], 2, ',', '.') . '</td>';
@@ -71,11 +72,12 @@ if (count($cierres) === 0) {
         }
         echo '<td>' . (int) ($c['cantidad_movimientos'] ?? 0) . '</td>';
         echo '<td class="nowrap">';
-        echo '<a class="action-icon" href="imprimir_caja_cierre.php?fecha=' . h($f) . '" target="_blank" title="Imprimir cierre">🖨️</a>';
+        echo '<a class="btn-secondary" href="imprimir_caja_cierre.php?fecha=' . h($f)
+            . '" target="_blank" rel="noopener" title="Ver e imprimir reporte de cierre">🖨️ Ver / imprimir</a>';
         echo '</td></tr>';
     }
     echo '</tbody></table>';
 }
 
-echo '<p class="muted"><a href="caja.php">Caja del día</a></p>';
+echo '<p class="muted"><a href="caja.php">Caja del día</a> · <a href="index.php">Inicio</a></p>';
 layout_end();

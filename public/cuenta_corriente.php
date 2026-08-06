@@ -191,6 +191,8 @@ if ($alumno) {
     } else {
         echo '<span class="muted" title="Alumno inactivo: la ficha no se edita desde la app">👤 (solo consulta)</span>';
     }
+    echo '<a class="action-icon" href="informes_estado_cuenta.php?alumno_id=' . (int) $alumno['id'] . '" title="Estado de cuenta">📄</a>';
+    echo '<a class="action-icon" href="imprimir_estado_cuenta.php?alumno_id=' . (int) $alumno['id'] . '" target="_blank" rel="noopener" title="Imprimir estado de cuenta">🖨️</a>';
     echo '</span> · <a href="' . h($toggleModo) . '">' . h($toggleLabel) . '</a></p>';
 
     if (count($movimientos) > 0) {

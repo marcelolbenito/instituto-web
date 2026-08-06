@@ -1070,6 +1070,45 @@ button.link {
   font-size: 0.82rem;
   line-height: 1.45;
 }
+.estado-cuenta-datos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.45rem 1.25rem;
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  background: #f7f9fc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.estado-cuenta-datos dt {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0;
+}
+.estado-cuenta-datos dd {
+  margin: 0.1rem 0 0;
+  font-weight: 600;
+}
+.estado-cuenta-total {
+  font-size: 1.08rem;
+  margin-top: 0.85rem;
+}
+.estado-cuenta-tabla {
+  max-width: 52rem;
+}
+.cc-print-seccion {
+  margin: 1rem 0 0.5rem;
+  font-size: 1rem;
+}
+.caja-reporte-facturacion,
+.caja-reporte-medios {
+  margin: 0.35rem 0 0.85rem;
+  width: 100%;
+  max-width: 42rem;
+}
+.caja-reporte-facturacion code {
+  font-size: 0.95em;
+}
 /* Impresión: solo el bloque #recibo (registrar_cobro.php?pago_id=…) */
 @media print {
   body:has(#recibo) * {

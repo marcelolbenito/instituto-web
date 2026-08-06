@@ -107,14 +107,17 @@ function nav_main(array $config, ?string $logoUrl = null): void
         ['anular_recibo.php', 'Anular recibo', '↩️'],
         ['factura_electronica.php', 'Factura electrónica por recibo', '🧾'],
         ['caja.php', 'Caja del día', '🏧'],
-        ['caja_cierres.php', 'Historial de cierres', '📒'],
+        ['caja_cierres.php', 'Cierre de caja (reporte)', '📒'],
         ['ajuste_debe.php', 'Cargar debe manual', '📝'],
         ['generar_cuotas.php', 'Generación de abonos', '🧾'],
     ];
     $informes = [
         ['informes_saldos.php', 'Saldo general', '📊'],
-        ['informes_morosos.php', 'Morosos', '⚠️'],
+        ['informes_morosos.php', 'Morosidad', '⚠️'],
         ['informes_recibos.php', 'Resumen de recibos', '🧾'],
+        ['informes_cobranza_mensual.php', 'Cobranza mensual', '📅'],
+        ['informes_estado_cuenta.php', 'Estado de cuenta', '📄'],
+        ['caja_cierres.php', 'Cierre de caja', '🏧'],
         ['alumnos.php', 'Listado de clientes', '📋'],
         ['cuenta_corriente.php', 'Cuenta corriente', '💳'],
     ];

@@ -83,6 +83,331 @@ function caja_label_medio(string $slug): string
 }
 
 /**
+ * Etiquetas de formas de pago para el reporte de cierre (separando débito/crédito).
+ *
+ * @return array<string, string> codigo => etiqueta
+ */
+function caja_formas_pago_labels_reporte(): array
+{
+    return [
+        'efectivo' => 'Efectivo',
+        'transferencia' => 'Transferencia',
+        'debito' => 'Tarjeta de débito',
+        'tarjeta' => 'Tarjeta de crédito',
+        'cheque' => 'Cheque',
+        'otro' => 'Otro',
+    ];
+}
+
+function caja_label_forma_pago_reporte(string $codigo, ?string $nombreCatalogo = null): string
+{
+    $codigo = strtolower(trim($codigo));
+    if ($nombreCatalogo !== null && trim($nombreCatalogo) !== '') {
+        return trim($nombreCatalogo);
+    }
+    $map = caja_formas_pago_labels_reporte();
+
+    return $map[$codigo] ?? ($codigo !== '' ? ucfirst($codigo) : 'Otro');
+}
+
+/**
+ * Totales del día por forma de pago real del cobro (débito y crédito separados).
+ * Incluye movimientos manuales de caja (sin pago_id) agrupados por medio de caja.
+ *
+ * @return list<array{codigo:string,label:string,ingresos:float,egresos:float,neto:float,cantidad:int}>
+ */
+function caja_totales_por_forma_pago(PDO $pdo, string $fechaYmd): array
+{
+    $acc = [];
+    if (!caja_schema_ok($pdo) || preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaYmd) !== 1) {
+        return [];
+    }
+
+    $bump = static function (string $codigo, string $label, float $ing, float $egr, int $cant) use (&$acc): void {
+        $codigo = strtolower(trim($codigo));
+        if ($codigo === '' || $codigo === 'cuenta_corriente') {
+            return;
+        }
+        if (!isset($acc[$codigo])) {
+            $acc[$codigo] = [
+                'codigo' => $codigo,
+                'label' => $label,
+                'ingresos' => 0.0,
+                'egresos' => 0.0,
+                'neto' => 0.0,
+                'cantidad' => 0,
+            ];
+        }
+        $acc[$codigo]['ingresos'] = round($acc[$codigo]['ingresos'] + $ing, 2);
+        $acc[$codigo]['egresos'] = round($acc[$codigo]['egresos'] + $egr, 2);
+        $acc[$codigo]['neto'] = round($acc[$codigo]['ingresos'] - $acc[$codigo]['egresos'], 2);
+        $acc[$codigo]['cantidad'] += $cant;
+        if ($label !== '' && ($acc[$codigo]['label'] === '' || $acc[$codigo]['label'] === ucfirst($codigo))) {
+            $acc[$codigo]['label'] = $label;
+        }
+    };
+
+    $nombresFp = [];
+    if (db_has_column($pdo, 'formas_pago', 'codigo')) {
+        $stN = $pdo->query('SELECT codigo, nombre FROM formas_pago');
+        if ($stN) {
+            foreach ($stN->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $nombresFp[strtolower((string) $row['codigo'])] = (string) $row['nombre'];
+            }
+        }
+    }
+
+    if (caja_tiene_pago_id($pdo)) {
+        $exprFecha = caja_sql_expr_fecha_operativa();
+        $sqlIng = caja_sql_importe_ingreso_vigente($pdo);
+        $joinFp = db_has_column($pdo, 'pago_registrado', 'forma_pago_id')
+            && db_has_column($pdo, 'formas_pago', 'codigo')
+            ? 'LEFT JOIN formas_pago fp ON fp.id = pr.forma_pago_id'
+            : '';
+        $exprForma = $joinFp !== ''
+            ? "LOWER(TRIM(COALESCE(NULLIF(pr.medio, ''), fp.codigo, cm.medio, 'otro')))"
+            : "LOWER(TRIM(COALESCE(NULLIF(pr.medio, ''), cm.medio, 'otro')))";
+        $sql = "SELECT {$exprForma} AS forma,
+                       COALESCE(SUM({$sqlIng}), 0) AS ingresos,
+                       COALESCE(SUM(" . caja_sql_importe_egreso() . "), 0) AS egresos,
+                       SUM(CASE WHEN cm.tipo = 'ingreso' THEN 1 ELSE 0 END) AS cant_ing
+                FROM caja_movimiento cm
+                LEFT JOIN pago_registrado pr ON pr.id = cm.pago_id
+                {$joinFp}
+                WHERE {$exprFecha} = ?
+                GROUP BY {$exprForma}";
+        $st = $pdo->prepare($sql);
+        $st->execute([$fechaYmd]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $cod = strtolower(trim((string) ($row['forma'] ?? 'otro')));
+            $label = caja_label_forma_pago_reporte($cod, $nombresFp[$cod] ?? null);
+            $bump(
+                $cod,
+                $label,
+                (float) ($row['ingresos'] ?? 0),
+                (float) ($row['egresos'] ?? 0),
+                (int) ($row['cant_ing'] ?? 0)
+            );
+        }
+    } else {
+        $st = $pdo->prepare(
+            "SELECT medio AS forma,
+                    COALESCE(SUM(CASE WHEN tipo = 'ingreso' THEN importe ELSE 0 END), 0) AS ingresos,
+                    COALESCE(SUM(CASE WHEN tipo = 'egreso' THEN importe ELSE 0 END), 0) AS egresos,
+                    SUM(CASE WHEN tipo = 'ingreso' THEN 1 ELSE 0 END) AS cant_ing
+             FROM caja_movimiento
+             WHERE DATE(fecha_hora) = ?
+             GROUP BY medio"
+        );
+        $st->execute([$fechaYmd]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $cod = strtolower(trim((string) ($row['forma'] ?? 'otro')));
+            $bump(
+                $cod,
+                caja_label_forma_pago_reporte($cod, $nombresFp[$cod] ?? null),
+                (float) ($row['ingresos'] ?? 0),
+                (float) ($row['egresos'] ?? 0),
+                (int) ($row['cant_ing'] ?? 0)
+            );
+        }
+    }
+
+    $orden = array_flip(array_keys(caja_formas_pago_labels_reporte()));
+    uasort($acc, static function (array $a, array $b) use ($orden): int {
+        $oa = $orden[$a['codigo']] ?? 500;
+        $ob = $orden[$b['codigo']] ?? 500;
+        if ($oa !== $ob) {
+            return $oa <=> $ob;
+        }
+
+        return strcmp($a['label'], $b['label']);
+    });
+
+    return array_values(array_filter(
+        $acc,
+        static fn (array $r): bool => abs($r['ingresos']) > 0.005
+            || abs($r['egresos']) > 0.005
+            || $r['cantidad'] > 0
+    ));
+}
+
+/**
+ * Rango de numeración de facturas electrónicas autorizadas del día (por fecha de recibo).
+ *
+ * @return array{
+ *   rangos: list<array{punto_venta:int,desde:int,hasta:int,cantidad:int,desde_fmt:string,hasta_fmt:string}>,
+ *   cantidad_total: int
+ * }
+ */
+function caja_rango_facturacion_dia(PDO $pdo, string $fechaYmd): array
+{
+    $vacío = ['rangos' => [], 'cantidad_total' => 0];
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaYmd) !== 1) {
+        return $vacío;
+    }
+    if (!db_has_column($pdo, 'pago_registrado', 'comprobante_id')) {
+        return $vacío;
+    }
+    try {
+        $pdo->query('SELECT 1 FROM comprobante_electronico LIMIT 1');
+    } catch (Throwable $e) {
+        return $vacío;
+    }
+
+    $filtroAnul = db_has_column($pdo, 'pago_registrado', 'anulado_en')
+        ? ' AND pr.anulado_en IS NULL'
+        : '';
+
+    $sql = "SELECT c.punto_venta,
+                   MIN(c.numero) AS desde,
+                   MAX(c.numero) AS hasta,
+                   COUNT(*) AS cantidad
+            FROM pago_registrado pr
+            INNER JOIN comprobante c ON c.id = pr.comprobante_id
+            INNER JOIN comprobante_electronico ce ON ce.comprobante_id = c.id
+            WHERE pr.fecha_pago = ?
+              AND ce.estado = 'autorizado'
+              AND COALESCE(pr.medio, '') NOT IN ('legacy', 'excel')
+              {$filtroAnul}
+            GROUP BY c.punto_venta
+            ORDER BY c.punto_venta";
+    $st = $pdo->prepare($sql);
+    $st->execute([$fechaYmd]);
+    $rangos = [];
+    $total = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $pv = (int) ($row['punto_venta'] ?? 0);
+        $desde = (int) ($row['desde'] ?? 0);
+        $hasta = (int) ($row['hasta'] ?? 0);
+        $cant = (int) ($row['cantidad'] ?? 0);
+        $total += $cant;
+        $rangos[] = [
+            'punto_venta' => $pv,
+            'desde' => $desde,
+            'hasta' => $hasta,
+            'cantidad' => $cant,
+            'desde_fmt' => sprintf('%05d-%08d', $pv, $desde),
+            'hasta_fmt' => sprintf('%05d-%08d', $pv, $hasta),
+        ];
+    }
+
+    return ['rangos' => $rangos, 'cantidad_total' => $total];
+}
+
+/**
+ * Datos de reporte para un cierre: snapshot guardado o cálculo en vivo.
+ *
+ * @param array<string,mixed>|null $cierreRow
+ * @return array{
+ *   formas_pago: list<array{codigo:string,label:string,ingresos:float,egresos:float,neto:float,cantidad:int}>,
+ *   facturacion: array{rangos:list<array<string,mixed>>,cantidad_total:int},
+ *   desde_snapshot: bool
+ * }
+ */
+function caja_datos_reporte_cierre(PDO $pdo, string $fechaYmd, ?array $cierreRow = null): array
+{
+    $arqueo = caja_decodificar_arqueo($cierreRow);
+    if (is_array($arqueo)
+        && isset($arqueo['formas_pago'], $arqueo['facturacion'])
+        && is_array($arqueo['formas_pago'])
+        && is_array($arqueo['facturacion'])
+    ) {
+        return [
+            'formas_pago' => array_values($arqueo['formas_pago']),
+            'facturacion' => [
+                'rangos' => array_values($arqueo['facturacion']['rangos'] ?? []),
+                'cantidad_total' => (int) ($arqueo['facturacion']['cantidad_total'] ?? 0),
+            ],
+            'desde_snapshot' => true,
+        ];
+    }
+
+    return [
+        'formas_pago' => caja_totales_por_forma_pago($pdo, $fechaYmd),
+        'facturacion' => caja_rango_facturacion_dia($pdo, $fechaYmd),
+        'desde_snapshot' => false,
+    ];
+}
+
+/**
+ * Bloque HTML del reporte: numeración FE + totales por forma de pago.
+ *
+ * @param array{
+ *   formas_pago?: list<array<string,mixed>>,
+ *   facturacion?: array{rangos?:list<array<string,mixed>>,cantidad_total?:int}
+ * } $datos
+ */
+function caja_render_bloque_reporte(array $datos, string $tituloClass = 'caja-arqueo-titulo'): void
+{
+    $fact = is_array($datos['facturacion'] ?? null) ? $datos['facturacion'] : [];
+    $rangos = is_array($fact['rangos'] ?? null) ? $fact['rangos'] : [];
+    $formas = is_array($datos['formas_pago'] ?? null) ? $datos['formas_pago'] : [];
+
+    echo '<h3 class="' . h($tituloClass) . '">Numeración de facturación</h3>';
+    if ($rangos === []) {
+        echo '<p class="muted">Sin facturas electrónicas autorizadas en esta fecha.</p>';
+    } else {
+        echo '<table class="table caja-reporte-facturacion"><thead><tr>';
+        echo '<th>Punto de venta</th><th>Desde</th><th>Hasta</th><th class="num">Cantidad</th>';
+        echo '</tr></thead><tbody>';
+        foreach ($rangos as $r) {
+            $pv = (int) ($r['punto_venta'] ?? 0);
+            $desdeFmt = (string) ($r['desde_fmt'] ?? sprintf('%05d-%08d', $pv, (int) ($r['desde'] ?? 0)));
+            $hastaFmt = (string) ($r['hasta_fmt'] ?? sprintf('%05d-%08d', $pv, (int) ($r['hasta'] ?? 0)));
+            echo '<tr>';
+            echo '<td>' . h((string) $pv) . '</td>';
+            echo '<td><code>' . h($desdeFmt) . '</code></td>';
+            echo '<td><code>' . h($hastaFmt) . '</code></td>';
+            echo '<td class="num">' . (int) ($r['cantidad'] ?? 0) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody>';
+        $cantTotal = (int) ($fact['cantidad_total'] ?? 0);
+        if ($cantTotal > 0) {
+            echo '<tfoot><tr><th colspan="3">Total facturas</th><td class="num">' . $cantTotal . '</td></tr></tfoot>';
+        }
+        echo '</table>';
+    }
+
+    echo '<h3 class="' . h($tituloClass) . '">Totalización por medio de pago</h3>';
+    if ($formas === []) {
+        echo '<p class="muted">Sin movimientos por medio de pago en esta fecha.</p>';
+
+        return;
+    }
+
+    echo '<table class="table caja-reporte-medios"><thead><tr>';
+    echo '<th>Medio de pago</th><th class="num">Ingresos</th><th class="num">Egresos</th><th class="num">Neto</th><th class="num">Cant.</th>';
+    echo '</tr></thead><tbody>';
+    $sumIng = 0.0;
+    $sumEgr = 0.0;
+    $sumCant = 0;
+    foreach ($formas as $f) {
+        $ing = (float) ($f['ingresos'] ?? 0);
+        $egr = (float) ($f['egresos'] ?? 0);
+        $neto = (float) ($f['neto'] ?? ($ing - $egr));
+        $cant = (int) ($f['cantidad'] ?? 0);
+        $sumIng += $ing;
+        $sumEgr += $egr;
+        $sumCant += $cant;
+        echo '<tr>';
+        echo '<td>' . h((string) ($f['label'] ?? caja_label_forma_pago_reporte((string) ($f['codigo'] ?? '')))) . '</td>';
+        echo '<td class="num">$ ' . number_format($ing, 2, ',', '.') . '</td>';
+        echo '<td class="num">$ ' . number_format($egr, 2, ',', '.') . '</td>';
+        echo '<td class="num"><strong>$ ' . number_format($neto, 2, ',', '.') . '</strong></td>';
+        echo '<td class="num">' . $cant . '</td>';
+        echo '</tr>';
+    }
+    echo '</tbody><tfoot><tr>';
+    echo '<th>Total</th>';
+    echo '<td class="num">$ ' . number_format($sumIng, 2, ',', '.') . '</td>';
+    echo '<td class="num">$ ' . number_format($sumEgr, 2, ',', '.') . '</td>';
+    echo '<td class="num"><strong>$ ' . number_format($sumIng - $sumEgr, 2, ',', '.') . '</strong></td>';
+    echo '<td class="num">' . $sumCant . '</td>';
+    echo '</tr></tfoot></table>';
+}
+
+/**
  * Totales del día por medio (ingresos − egresos = neto esperado en caja).
  *
  * @return array<string, array{ingresos: float, egresos: float, neto: float}>
@@ -166,13 +491,23 @@ function caja_armar_arqueo_cierre(PDO $pdo, string $fechaYmd, array $contadoPorM
         ];
     }
 
+    $formasPago = caja_totales_por_forma_pago($pdo, $fechaYmd);
+    $facturacion = caja_rango_facturacion_dia($pdo, $fechaYmd);
+
     return [
         'json' => json_encode(
-            ['medios' => $lineas, 'diferencia_total' => $hayContado ? round($diffTotal, 2) : null],
+            [
+                'medios' => $lineas,
+                'diferencia_total' => $hayContado ? round($diffTotal, 2) : null,
+                'formas_pago' => $formasPago,
+                'facturacion' => $facturacion,
+            ],
             JSON_UNESCAPED_UNICODE
         ),
         'diferencia' => $hayContado ? round($diffTotal, 2) : null,
         'lineas' => $lineas,
+        'formas_pago' => $formasPago,
+        'facturacion' => $facturacion,
     ];
 }
 

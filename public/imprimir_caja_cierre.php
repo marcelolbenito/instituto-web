@@ -62,6 +62,8 @@ body.cc-print-body { margin: 0; padding: 12mm 10mm; background: #fff; color: #11
 <tr><th>Egresos</th><td class="num">$ <?= number_format((float) $cierre['egresos'], 2, ',', '.') ?></td></tr>
 </tbody></table>
 <?php
+$reporteCierre = caja_datos_reporte_cierre($pdo, $fecha, $cierre);
+caja_render_bloque_reporte($reporteCierre, 'cc-print-seccion');
 $arqueo = caja_decodificar_arqueo($cierre);
 if ($arqueo !== null && !empty($arqueo['medios'])):
     $hayFilas = false;
@@ -73,7 +75,7 @@ if ($arqueo !== null && !empty($arqueo['medios'])):
     }
     if ($hayFilas):
 ?>
-<h3 style="margin:1rem 0 0.5rem;font-size:1rem">Arqueo (sistema vs. contado)</h3>
+<h3 class="cc-print-seccion">Arqueo (sistema vs. contado)</h3>
 <table class="table cc-print-arqueo">
 <thead><tr><th>Medio</th><th class="num">Sistema</th><th class="num">Contado</th><th class="num">Dif.</th></tr></thead>
 <tbody>

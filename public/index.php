@@ -108,7 +108,7 @@ layout_start($config, 'Inicio');
         <a class="qa-item" href="cuenta_corriente.php" title="Cuenta corriente"><span class="qa-icon">💳</span><span class="qa-label">Cta Cte</span></a>
         <a class="qa-item" href="registrar_cobro.php" title="Registrar cobro"><span class="qa-icon">💵</span><span class="qa-label">Cobro</span></a>
         <a class="qa-item" href="caja.php" title="Caja del día: movimientos, arqueo y cerrar hoy"><span class="qa-icon">🏧</span><span class="qa-label">Caja del día</span></a>
-        <a class="qa-item" href="caja_cierres.php" title="Consultar días de caja ya cerrados"><span class="qa-icon">📒</span><span class="qa-label">Historial de cierres</span></a>
+        <a class="qa-item" href="caja_cierres.php" title="Informe de cierre: facturación y totales por medio de pago"><span class="qa-icon">📒</span><span class="qa-label">Cierre de caja</span></a>
         <a class="qa-item" href="ajuste_debe.php" title="Carga manual"><span class="qa-icon">📝</span><span class="qa-label">Carga Manual</span></a>
         <a class="qa-item" href="articulos.php" title="Artículos"><span class="qa-icon">📦</span><span class="qa-label">Artículos</span></a>
         <a class="qa-item" href="conceptos_alumno.php" title="Conceptos"><span class="qa-icon">✅</span><span class="qa-label">Conceptos</span></a>
