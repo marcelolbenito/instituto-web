@@ -381,7 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stCu = $pdo->prepare(
         'SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-                ' . cobranza_sql_select_beca_cuota_historica() . postitulo_sql_select_cols($pdo, 'cm') . '
+                ' . cobranza_sql_select_beca_cuota_historica($pdo) . postitulo_sql_select_cols($pdo, 'cm') . '
          FROM cuota_mensual cm
          ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
          ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
@@ -864,7 +864,7 @@ if ($alumnoId > 0) {
                 COALESCE(pa.aplicado, 0) AS aplicado_acum,
                 COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-                ' . cobranza_sql_select_beca_cuota_historica() . postitulo_sql_select_cols($pdo, 'cm') . ',
+                ' . cobranza_sql_select_beca_cuota_historica($pdo) . postitulo_sql_select_cols($pdo, 'cm') . ',
                 STR_TO_DATE(CONCAT(cm.anio, "-", LPAD(cm.mes, 2, "0"), "-01"), "%Y-%m-%d") AS fecha_mov,
                 CASE
                     WHEN COALESCE(cm.importe_original, 0) > 0
@@ -895,7 +895,7 @@ if ($alumnoId > 0) {
                 COALESCE(pa.aplicado, 0) AS aplicado_acum,
                 COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-                ' . cobranza_sql_select_beca_cuota_historica() . postitulo_sql_select_cols($pdo, 'cm') . ',
+                ' . cobranza_sql_select_beca_cuota_historica($pdo) . postitulo_sql_select_cols($pdo, 'cm') . ',
                 STR_TO_DATE(CONCAT(cm.anio, "-", LPAD(cm.mes, 2, "0"), "-01"), "%Y-%m-%d") AS fecha_mov,
                 CASE
                     WHEN COALESCE(cm.importe_original, 0) > 0
@@ -931,7 +931,7 @@ if ($alumnoId > 0) {
                 if (count($cuotaSelGet) > 0) {
                     $stCu = $pdo->prepare(
                         'SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pa.descuento_acum, 0) AS descuento_acum, COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-                            ' . cobranza_sql_select_beca_cuota_historica() . postitulo_sql_select_cols($pdo, 'cm') . '
+                            ' . cobranza_sql_select_beca_cuota_historica($pdo) . postitulo_sql_select_cols($pdo, 'cm') . '
                      FROM cuota_mensual cm
                      ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
                      ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '

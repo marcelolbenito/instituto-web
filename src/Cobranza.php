@@ -608,11 +608,45 @@ function cobranza_sql_select_articulos_beca_detalle(string $alumnoIdSql = 'cm.al
 
 /**
  * Columnas de beca para liquidar una cuota histórica.
- * No usa artículos actuales del alumno (evitar reclasificar meses viejos).
+ * "Tiene beca" se deduce del abono base congelado al generar (no de artículos actuales).
  */
-function cobranza_sql_select_beca_cuota_historica(): string
+function cobranza_sql_select_beca_cuota_historica(?PDO $pdo = null): string
 {
+    if ($pdo instanceof PDO && db_has_column($pdo, 'cuota_mensual', 'importe_abono_referencia')) {
+        return 'CASE WHEN COALESCE(cm.importe_abono_referencia, 0) > COALESCE(cm.importe_original, 0) + 0.005'
+            . ' THEN 1 ELSE 0 END AS tiene_beca,'
+            . ' NULL AS articulos_beca_detalle';
+    }
+
     return '0 AS tiene_beca, NULL AS articulos_beca_detalle';
+}
+
+/**
+ * Abono/cuota base de lista vigente (solo para congelar al generar cuotas).
+ */
+function cobranza_abono_completo_referencia_lista(PDO $pdo): float
+{
+    static $cache = null;
+    if ($cache !== null) {
+        return $cache;
+    }
+    if (!db_has_column($pdo, 'articulos', 'es_abono')) {
+        $cache = 0.0;
+
+        return $cache;
+    }
+    $st = $pdo->query(
+        "SELECT COALESCE(MAX(importe_referencia), 0)
+         FROM articulos
+         WHERE activo = 1
+           AND es_abono = 1
+           AND importe_referencia > 0
+           AND UPPER(detalle) NOT LIKE '%BECA%'
+           AND UPPER(detalle) NOT LIKE '%DESCUENTO%'"
+    );
+    $cache = $st ? round((float) $st->fetchColumn(), 2) : 0.0;
+
+    return $cache;
 }
 
 function cobranza_debe_pendiente_presentacion(array $adj): array
@@ -1046,7 +1080,8 @@ function cobranza_calcular_linea_saldo(
     float $difBeca = 0.0,
     string $articuloBecaDetalle = '',
     bool $esPostitulo = false,
-    ?string $fechaVencimientoPostitulo = null
+    ?string $fechaVencimientoPostitulo = null,
+    float $abonoCompletoHistorico = 0.0
 ): array {
     $saldo = max(0.0, round($saldo, 2));
 
@@ -1057,8 +1092,7 @@ function cobranza_calcular_linea_saldo(
     $descFijo = max(0.0, (float) ($param['bonificacion_pronto_pago'] ?? 0));
     $interesFijoMora = max(0.0, (float) ($param['importe_interes_mora_fijo'] ?? 0));
     $difBeca = max(0.0, $difBeca);
-    // No usar precio actual de artículos: la base es siempre el saldo histórico de la cuota
-    // (importe_original de ese mes). difBeca solo si viene guardada en la cuota.
+    $abonoCompletoHistorico = max(0.0, round($abonoCompletoHistorico, 2));
 
     $fechasFeriado = is_array($param['fechas_feriado'] ?? null) ? $param['fechas_feriado'] : [];
     $tope = cobranza_fecha_tope_pronto_pago($anio, $mes, $diasHabiles, $fechasFeriado);
@@ -1077,15 +1111,19 @@ function cobranza_calcular_linea_saldo(
 
     $fp = new DateTimeImmutable($fechaPagoYmd);
     $dentro = $fp <= $tope;
+    if ($difBeca <= 0.00001 && $tieneBeca && $abonoCompletoHistorico > 0.00001) {
+        $difBeca = max(0.0, round($abonoCompletoHistorico - $saldo, 2));
+    }
     $pierdeBeca = $tieneBeca && $difBeca > 0.00001 && $fp > $topeBeca;
     $diasMora = $dentro ? 0 : cobranza_dias_mora_calendario($tope, $fp);
 
-    // Si hay diferencia de beca guardada en la cuota, la base de mora es saldo+diferencia
-    // histórica (no el abono de lista vigente).
+    // Perdió beca: liquidar sobre cuota base normal congelada al generar (no precio de lista actual).
     $abonoMensual = 0.0;
     $becaEnAbonoCompleto = false;
     if ($tieneBeca && $pierdeBeca) {
-        $abonoMensual = round($saldo + $difBeca, 2);
+        $abonoMensual = $abonoCompletoHistorico > 0.00001
+            ? $abonoCompletoHistorico
+            : round($saldo + $difBeca, 2);
         $becaEnAbonoCompleto = true;
     }
 
@@ -1153,8 +1191,15 @@ function cobranza_calcular_linea_cuota(array $param, array $cuota, string $fecha
     $anio = (int) $cuota['anio'];
     $mes = (int) $cuota['mes'];
     $saldo = cobranza_saldo_impago_cuota($cuota);
+    $orig = round((float) ($cuota['importe_original'] ?? 0), 2);
+    $abonoRef = round((float) ($cuota['importe_abono_referencia'] ?? 0), 2);
+    // Beca de ESE período: se congeló abono base > importe generado (becado).
+    $tieneBeca = $abonoRef > $orig + 0.005
+        || (int) ($cuota['tiene_beca'] ?? 0) === 1;
     $difBeca = max(0.0, (float) ($cuota['importe_diferencia_beca'] ?? 0));
-    $tieneBeca = (int) ($cuota['tiene_beca'] ?? 0) === 1;
+    if ($difBeca <= 0.00001 && $abonoRef > 0.00001) {
+        $difBeca = max(0.0, round($abonoRef - $saldo, 2));
+    }
     $artBeca = trim((string) ($cuota['articulos_beca_detalle'] ?? ''));
     $esPostitulo = (int) ($cuota['es_postitulo'] ?? 0) === 1;
     $vencPostitulo = isset($cuota['fecha_vencimiento_postitulo']) && $cuota['fecha_vencimiento_postitulo'] !== null
@@ -1171,7 +1216,8 @@ function cobranza_calcular_linea_cuota(array $param, array $cuota, string $fecha
         $difBeca,
         $artBeca,
         $esPostitulo,
-        $vencPostitulo
+        $vencPostitulo,
+        $abonoRef
     );
 }
 

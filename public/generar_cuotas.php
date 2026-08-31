@@ -62,10 +62,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $pdo->beginTransaction();
         try {
-            $ins = $pdo->prepare(
-                'INSERT INTO cuota_mensual (alumno_id, anio, mes, importe_original, saldo, fecha_vencimiento, estado, nota)
-                 VALUES (?, ?, ?, ?, ?, ?, \'pendiente\', ?)'
-            );
+            $abonoLista = cobranza_abono_completo_referencia_lista($pdo);
+            $hasAbonoRef = db_has_column($pdo, 'cuota_mensual', 'importe_abono_referencia');
+            if ($hasAbonoRef) {
+                $ins = $pdo->prepare(
+                    'INSERT INTO cuota_mensual (alumno_id, anio, mes, importe_original, importe_abono_referencia, saldo, fecha_vencimiento, estado, nota)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, \'pendiente\', ?)'
+                );
+            } else {
+                $ins = $pdo->prepare(
+                    'INSERT INTO cuota_mensual (alumno_id, anio, mes, importe_original, saldo, fecha_vencimiento, estado, nota)
+                     VALUES (?, ?, ?, ?, ?, ?, \'pendiente\', ?)'
+                );
+            }
             $chk = $pdo->prepare(
                 'SELECT id, estado FROM cuota_mensual WHERE alumno_id = ? AND anio = ? AND mes = ?'
             );
@@ -85,15 +94,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $nota = 'Generada desde artículos asignados (' . date('Y-m-d H:i') . ')';
-                $ins->execute([
-                    $alumnoId,
-                    $anio,
-                    $mes,
-                    $total,
-                    $total,
-                    $fechaVen,
-                    $nota,
-                ]);
+                // Si hay BECA, congelar abono base de lista para liquidar pérdida de beca sobre cuota normal.
+                $abonoRef = null;
+                if ($hasAbonoRef) {
+                    $tieneBeca = cobranza_alumno_tiene_beca($pdo, $alumnoId);
+                    if ($tieneBeca && $abonoLista > $total + 0.005) {
+                        $abonoRef = $abonoLista;
+                    } else {
+                        $abonoRef = $total;
+                    }
+                }
+                if ($hasAbonoRef) {
+                    $ins->execute([
+                        $alumnoId,
+                        $anio,
+                        $mes,
+                        $total,
+                        $abonoRef,
+                        $total,
+                        $fechaVen,
+                        $nota,
+                    ]);
+                } else {
+                    $ins->execute([
+                        $alumnoId,
+                        $anio,
+                        $mes,
+                        $total,
+                        $total,
+                        $fechaVen,
+                        $nota,
+                    ]);
+                }
                 $creadas++;
             }
 
@@ -119,7 +151,11 @@ $mesDefault = (int) $ahora->format('n');
 
 layout_start($config, 'Generar cuotas');
 echo '<h1>Generar cuotas del mes</h1>';
-echo '<p class="muted">Solo alumnos con <strong>activo = sí</strong>. Por cada uno con al menos un <strong>artículo asignado</strong> (y artículo activo), se crea una fila en <code>cuota_mensual</code> con importe = suma de precios lista 1 (<code>importe_referencia</code>). No pisa cuotas ya existentes para ese período. La fecha del cargo es el <strong>día de generación</strong> configurado en <a href="parametros_cobranza.php">Parámetros cobranza</a> (por defecto el <strong>1</strong> de cada mes); en cuenta corriente se muestra siempre el <strong>1 del período</strong> (ej. cuota 2026-05 → 01/05/2026).</p>';
+echo '<p class="muted">Solo alumnos con <strong>activo = sí</strong>. Por cada uno con al menos un <strong>artículo asignado</strong> (y artículo activo), se crea una fila en <code>cuota_mensual</code> con importe = suma de precios lista 1 (<code>importe_referencia</code>). Si el alumno tiene BECA, también se congela el <strong>abono/cuota base</strong> de ese momento (para liquidar a valor normal si pierde la beca). No pisa cuotas ya existentes para ese período.</p>';
+if (!db_has_column($pdo, 'cuota_mensual', 'importe_abono_referencia')) {
+    echo '<p class="warn">Para congelar la cuota base ante pérdida de beca, ejecutá '
+        . '<code>sql/migracion/41_cuota_importe_abono_referencia_compat.sql</code>.</p>';
+}
 if (!$hasTipoAlumno || !$hasRangoPostgrado) {
     echo '<p class="err">Ejecutá la migración <code>sql/migracion/21_tipo_alumno_y_periodo_postgrado.sql</code> para habilitar tipo de alumno y rango de postgrado.</p>';
 }
