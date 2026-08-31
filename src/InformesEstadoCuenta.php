@@ -85,7 +85,7 @@ function informes_estado_cuenta_armar(PDO $pdo, int $alumnoId, ?string $fechaCon
         $mes = (int) ($cuota['mes'] ?? 0);
         $lineas[] = [
             'tipo' => 'cuota',
-            'concepto' => sprintf('Cuota %02d/%04d', $mes, $anio),
+            'concepto' => sprintf('Cuota mensual %04d-%02d', $anio, $mes),
             'periodo' => sprintf('%04d-%02d', $anio, $mes),
             'fecha_ref' => (string) ($calc['fecha_tope_pronto'] ?? ''),
             'monto_original' => $original,

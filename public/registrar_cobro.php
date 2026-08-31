@@ -27,15 +27,16 @@ function cobro_fmt_money(float $value): string
     return '$ ' . number_format($value, 2, ',', '.');
 }
 
-/** Concepto en grilla de cobro: nombre del artículo BECA si el alumno lo tiene asignado. */
+/** Concepto en grilla de cobro: etiqueta histórica del período (no el artículo actual). */
 function cobro_concepto_cuota_label(array $cuota): string
 {
-    if ((int) ($cuota['tiene_beca'] ?? 0) !== 1) {
-        return 'Abono / cuota';
+    $anio = (int) ($cuota['anio'] ?? 0);
+    $mes = (int) ($cuota['mes'] ?? 0);
+    if ($anio >= 2000 && $mes >= 1 && $mes <= 12) {
+        return sprintf('Cuota mensual %04d-%02d', $anio, $mes);
     }
-    $det = trim((string) ($cuota['articulos_beca_detalle'] ?? ''));
 
-    return $det !== '' ? $det : 'BECA';
+    return 'Cuota mensual';
 }
 
 /**
@@ -380,15 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stCu = $pdo->prepare(
         'SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-                EXISTS(
-                    SELECT 1
-                    FROM alumno_articulo aa_b
-                    JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
-                    WHERE aa_b.alumno_id = cm.alumno_id
-                      AND ar_b.activo = 1
-                      AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
-                ) AS tiene_beca,
-                ' . cobranza_sql_select_articulos_beca_detalle() . postitulo_sql_select_cols($pdo, 'cm') . '
+                ' . cobranza_sql_select_beca_cuota_historica() . postitulo_sql_select_cols($pdo, 'cm') . '
          FROM cuota_mensual cm
          ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
          ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
@@ -871,15 +864,7 @@ if ($alumnoId > 0) {
                 COALESCE(pa.aplicado, 0) AS aplicado_acum,
                 COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-                EXISTS(
-                    SELECT 1
-                    FROM alumno_articulo aa_b
-                    JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
-                    WHERE aa_b.alumno_id = cm.alumno_id
-                      AND ar_b.activo = 1
-                      AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
-                ) AS tiene_beca,
-                ' . cobranza_sql_select_articulos_beca_detalle() . postitulo_sql_select_cols($pdo, 'cm') . ',
+                ' . cobranza_sql_select_beca_cuota_historica() . postitulo_sql_select_cols($pdo, 'cm') . ',
                 STR_TO_DATE(CONCAT(cm.anio, "-", LPAD(cm.mes, 2, "0"), "-01"), "%Y-%m-%d") AS fecha_mov,
                 CASE
                     WHEN COALESCE(cm.importe_original, 0) > 0
@@ -910,15 +895,7 @@ if ($alumnoId > 0) {
                 COALESCE(pa.aplicado, 0) AS aplicado_acum,
                 COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-                EXISTS(
-                    SELECT 1
-                    FROM alumno_articulo aa_b
-                    JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
-                    WHERE aa_b.alumno_id = cm.alumno_id
-                      AND ar_b.activo = 1
-                      AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
-                ) AS tiene_beca,
-                ' . cobranza_sql_select_articulos_beca_detalle() . postitulo_sql_select_cols($pdo, 'cm') . ',
+                ' . cobranza_sql_select_beca_cuota_historica() . postitulo_sql_select_cols($pdo, 'cm') . ',
                 STR_TO_DATE(CONCAT(cm.anio, "-", LPAD(cm.mes, 2, "0"), "-01"), "%Y-%m-%d") AS fecha_mov,
                 CASE
                     WHEN COALESCE(cm.importe_original, 0) > 0
@@ -954,15 +931,7 @@ if ($alumnoId > 0) {
                 if (count($cuotaSelGet) > 0) {
                     $stCu = $pdo->prepare(
                         'SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pa.descuento_acum, 0) AS descuento_acum, COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
-                            EXISTS(
-                                SELECT 1
-                                FROM alumno_articulo aa_b
-                                JOIN articulos ar_b ON ar_b.id = aa_b.articulo_id
-                                WHERE aa_b.alumno_id = cm.alumno_id
-                                  AND ar_b.activo = 1
-                                  AND UPPER(ar_b.detalle) LIKE \'%BECA%\'
-                            ) AS tiene_beca,
-                            ' . cobranza_sql_select_articulos_beca_detalle() . postitulo_sql_select_cols($pdo, 'cm') . '
+                            ' . cobranza_sql_select_beca_cuota_historica() . postitulo_sql_select_cols($pdo, 'cm') . '
                      FROM cuota_mensual cm
                      ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
                      ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '

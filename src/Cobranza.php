@@ -606,6 +606,15 @@ function cobranza_sql_select_articulos_beca_detalle(string $alumnoIdSql = 'cm.al
           AND UPPER(ar_b.detalle) LIKE \'%BECA%\') AS articulos_beca_detalle';
 }
 
+/**
+ * Columnas de beca para liquidar una cuota histórica.
+ * No usa artículos actuales del alumno (evitar reclasificar meses viejos).
+ */
+function cobranza_sql_select_beca_cuota_historica(): string
+{
+    return '0 AS tiene_beca, NULL AS articulos_beca_detalle';
+}
+
 function cobranza_debe_pendiente_presentacion(array $adj): array
 {
     $ref = trim((string) ($adj['referencia'] ?? ''));
@@ -1048,7 +1057,8 @@ function cobranza_calcular_linea_saldo(
     $descFijo = max(0.0, (float) ($param['bonificacion_pronto_pago'] ?? 0));
     $interesFijoMora = max(0.0, (float) ($param['importe_interes_mora_fijo'] ?? 0));
     $difBeca = max(0.0, $difBeca);
-    $abonoCompletoRef = max(0.0, (float) ($param['abono_completo_referencia_beca'] ?? 0));
+    // No usar precio actual de artículos: la base es siempre el saldo histórico de la cuota
+    // (importe_original de ese mes). difBeca solo si viene guardada en la cuota.
 
     $fechasFeriado = is_array($param['fechas_feriado'] ?? null) ? $param['fechas_feriado'] : [];
     $tope = cobranza_fecha_tope_pronto_pago($anio, $mes, $diasHabiles, $fechasFeriado);
@@ -1067,20 +1077,15 @@ function cobranza_calcular_linea_saldo(
 
     $fp = new DateTimeImmutable($fechaPagoYmd);
     $dentro = $fp <= $tope;
-    if ($difBeca <= 0.00001 && $tieneBeca && $abonoCompletoRef > 0.00001) {
-        $difBeca = max(0.0, round($abonoCompletoRef - $saldo, 2));
-    }
-    $pierdeBeca = $difBeca > 0.00001 && $fp > $topeBeca;
+    $pierdeBeca = $tieneBeca && $difBeca > 0.00001 && $fp > $topeBeca;
     $diasMora = $dentro ? 0 : cobranza_dias_mora_calendario($tope, $fp);
 
-    // Beca fuera del 5.º día hábil: deuda = abono mensual completo; mora sobre ese monto (no beca + dif. + mora sobre beca).
+    // Si hay diferencia de beca guardada en la cuota, la base de mora es saldo+diferencia
+    // histórica (no el abono de lista vigente).
     $abonoMensual = 0.0;
     $becaEnAbonoCompleto = false;
     if ($tieneBeca && $pierdeBeca) {
         $abonoMensual = round($saldo + $difBeca, 2);
-        if ($abonoCompletoRef > $abonoMensual + 0.005) {
-            $abonoMensual = round($abonoCompletoRef, 2);
-        }
         $becaEnAbonoCompleto = true;
     }
 
