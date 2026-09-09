@@ -622,6 +622,98 @@ function cobranza_sql_select_beca_cuota_historica(?PDO $pdo = null): string
 }
 
 /**
+ * ¿El importe coincide con algún artículo BECA del catálogo?
+ */
+function cobranza_importe_coincide_articulo_beca(PDO $pdo, float $importe): bool
+{
+    static $precios = null;
+    if ($precios === null) {
+        $precios = [];
+        $st = $pdo->query(
+            "SELECT importe_referencia
+             FROM articulos
+             WHERE UPPER(detalle) LIKE '%BECA%'"
+        );
+        if ($st) {
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $p) {
+                $precios[] = round((float) $p, 2);
+            }
+        }
+    }
+    $importe = round($importe, 2);
+    foreach ($precios as $p) {
+        if (abs($p - $importe) <= 0.02) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Completa beca para liquidar:
+ * - Si hay freeze (abono_ref > original): usarlo (base histórica de ese mes).
+ * - Si la cuota es becada (importe = precio BECA) y no hay freeze: base = cuota lista actual
+ *   (ej. setiembre beca fuera de término → 101.000).
+ * - Cuotas comunes históricas (ej. julio 96.000): no tocar; liquidar/mora sobre CC.
+ *
+ * @param array<string,mixed> $cuota
+ * @return array<string,mixed>
+ */
+function cobranza_enriquecer_cuota_beca_para_liquidar(
+    PDO $pdo,
+    array $cuota,
+    ?bool $alumnoTieneBeca = null,
+    string $labelBeca = ''
+): array {
+    $orig = round((float) ($cuota['importe_original'] ?? 0), 2);
+    $abonoRef = round((float) ($cuota['importe_abono_referencia'] ?? 0), 2);
+    $lista = cobranza_abono_completo_referencia_lista($pdo);
+
+    // Freeze real al generar (base de ese momento > importe becado).
+    if ($abonoRef > $orig + 0.005) {
+        $cuota['tiene_beca'] = 1;
+        if ($labelBeca !== '' && trim((string) ($cuota['articulos_beca_detalle'] ?? '')) === '') {
+            $cuota['articulos_beca_detalle'] = $labelBeca;
+        }
+
+        return $cuota;
+    }
+
+    // Cuota generada con importe de artículo BECA (sin freeze): al perder beca usar lista actual.
+    $cuotaEsBeca = cobranza_importe_coincide_articulo_beca($pdo, $orig);
+    if (!$cuotaEsBeca) {
+        // Mes común en CC (p. ej. 91k/96k): no inventar beca por el artículo actual del alumno.
+        $cuota['tiene_beca'] = 0;
+        $cuota['articulos_beca_detalle'] = null;
+
+        return $cuota;
+    }
+
+    if ($lista <= $orig + 0.005) {
+        $cuota['tiene_beca'] = 1;
+        if ($labelBeca !== '') {
+            $cuota['articulos_beca_detalle'] = $labelBeca;
+        }
+
+        return $cuota;
+    }
+
+    $cuota['importe_abono_referencia'] = $lista;
+    $cuota['tiene_beca'] = 1;
+    if ($labelBeca !== '') {
+        $cuota['articulos_beca_detalle'] = $labelBeca;
+    } elseif (trim((string) ($cuota['articulos_beca_detalle'] ?? '')) === '') {
+        $alumnoId = (int) ($cuota['alumno_id'] ?? 0);
+        if ($alumnoId > 0) {
+            $cuota['articulos_beca_detalle'] = cobranza_alumno_articulos_beca_label($pdo, $alumnoId);
+        }
+    }
+
+    return $cuota;
+}
+
+/**
  * Abono/cuota base de lista vigente (solo para congelar al generar cuotas).
  */
 function cobranza_abono_completo_referencia_lista(PDO $pdo): float
@@ -917,6 +1009,60 @@ function cobranza_listar_cuotas_morosas(PDO $pdo, ?int $alumnoId = null, ?DateTi
     return $out;
 }
 
+/**
+ * Deuda de cuotas morosas a una fecha: saldo de CC de la cuota vs liquidación de cobro (mora/beca).
+ *
+ * @return array{
+ *   cuotas: list<array<string,mixed>>,
+ *   total_saldo_cuotas: float,
+ *   total_actualizado: float,
+ *   total_recargos: float,
+ *   total_beca: float
+ * }
+ */
+function cobranza_morosos_deuda_actualizada_alumno(
+    PDO $pdo,
+    int $alumnoId,
+    ?DateTimeImmutable $fechaRef = null
+): array {
+    $fechaRef = $fechaRef ?? new DateTimeImmutable('today');
+    $fechaYmd = $fechaRef->format('Y-m-d');
+    $param = cobranza_cargar_parametros($pdo);
+    $cuotas = cobranza_listar_cuotas_morosas($pdo, $alumnoId, $fechaRef);
+    $totalSaldo = 0.0;
+    $totalAct = 0.0;
+    $totalRec = 0.0;
+    $totalBeca = 0.0;
+    $out = [];
+    foreach ($cuotas as $c) {
+        $calc = cobranza_calcular_linea_cuota($param, $c, $fechaYmd, $pdo);
+        $saldo = round((float) ($c['saldo_impago'] ?? cobranza_saldo_impago_cuota($c)), 2);
+        $act = round((float) ($calc['total_linea'] ?? $saldo), 2);
+        $rec = round(
+            (float) ($calc['importe_recargo_variable'] ?? 0) + (float) ($calc['importe_recargo_fijo'] ?? 0),
+            2
+        );
+        $beca = round((float) ($calc['importe_beca_perdida'] ?? 0), 2);
+        $c['calc'] = $calc;
+        $c['deuda_actualizada'] = $act;
+        $c['importe_recargos'] = $rec;
+        $c['importe_beca'] = $beca;
+        $out[] = $c;
+        $totalSaldo += $saldo;
+        $totalAct += $act;
+        $totalRec += $rec;
+        $totalBeca += $beca;
+    }
+
+    return [
+        'cuotas' => $out,
+        'total_saldo_cuotas' => round($totalSaldo, 2),
+        'total_actualizado' => round($totalAct, 2),
+        'total_recargos' => round($totalRec, 2),
+        'total_beca' => round($totalBeca, 2),
+    ];
+}
+
 function cobranza_saldo_impago_cuota(array $cuota): float
 {
     $orig = (float) ($cuota['importe_original'] ?? 0);
@@ -1140,10 +1286,10 @@ function cobranza_calcular_linea_saldo(
         }
     } else {
         if ($becaEnAbonoCompleto) {
-            // Fox: INTDIA = RECARGO/30 (%/día), INTFIN = INTDIA×días, RECA = DEBE×INTFIN/100.
+            // Mora sobre la cuota base; el capital en CC sigue siendo el importe becado.
             $recVar = round($abonoMensual * $coefDiario * $diasMora / 100, 2);
             $recFijo = $diasMora > 0 ? $interesFijoMora : 0.0;
-            $capital = $abonoMensual;
+            $capital = $saldo;
         } else {
             $recVar = round($saldo * $coefDiario * $diasMora / 100, 2);
             $recFijo = $diasMora > 0 ? $interesFijoMora : 0.0;
@@ -1151,7 +1297,15 @@ function cobranza_calcular_linea_saldo(
         }
     }
 
-    $impBecaPerdida = $becaEnAbonoCompleto ? 0.0 : ($pierdeBeca ? round($difBeca, 2) : 0.0);
+    // Diferencia beca como debe aparte en CC (RECIBO_INC BECA-C…), no metida dentro del capital.
+    $impBecaPerdida = 0.0;
+    if ($pierdeBeca) {
+        if ($becaEnAbonoCompleto && $abonoMensual > 0.00001) {
+            $impBecaPerdida = max(0.0, round($abonoMensual - $saldo, 2));
+        } else {
+            $impBecaPerdida = round($difBeca, 2);
+        }
+    }
     $total = round($capital + $recVar + $recFijo + $impBecaPerdida, 2);
     $baseCalculo = $becaEnAbonoCompleto ? $abonoMensual : $saldo;
     $articuloBecaDetalle = $tieneBeca ? trim($articuloBecaDetalle) : '';
@@ -1186,8 +1340,18 @@ function cobranza_calcular_linea_saldo(
  * @param array<string,mixed> $param
  * @param array<string,mixed> $cuota Fila cuota_mensual
  */
-function cobranza_calcular_linea_cuota(array $param, array $cuota, string $fechaPagoYmd): array
-{
+function cobranza_calcular_linea_cuota(
+    array $param,
+    array $cuota,
+    string $fechaPagoYmd,
+    ?PDO $pdo = null,
+    ?bool $alumnoTieneBeca = null,
+    string $labelBeca = ''
+): array {
+    if ($pdo instanceof PDO) {
+        $cuota = cobranza_enriquecer_cuota_beca_para_liquidar($pdo, $cuota, $alumnoTieneBeca, $labelBeca);
+    }
+
     $anio = (int) $cuota['anio'];
     $mes = (int) $cuota['mes'];
     $saldo = cobranza_saldo_impago_cuota($cuota);

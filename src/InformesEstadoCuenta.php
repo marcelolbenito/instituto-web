@@ -70,7 +70,7 @@ function informes_estado_cuenta_armar(PDO $pdo, int $alumnoId, ?string $fechaCon
                 (int) ($cuota['mes'] ?? 0)
             );
         }
-        $calc = cobranza_calcular_linea_cuota($param, $cuota, $fechaConsulta);
+        $calc = cobranza_calcular_linea_cuota($param, $cuota, $fechaConsulta, $pdo);
         $capital = round((float) ($calc['importe_capital'] ?? cobranza_saldo_impago_cuota($cuota)), 2);
         $original = round((float) ($cuota['importe_original'] ?? $capital), 2);
         $total = round((float) ($calc['total_linea'] ?? $capital), 2);

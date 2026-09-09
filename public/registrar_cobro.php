@@ -463,7 +463,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $hayParcial = false;
     try {
         foreach ($cuotas as $c) {
-            $calcBase = cobranza_calcular_linea_cuota($param, $c, $fechaPago);
+            $calcBase = cobranza_calcular_linea_cuota(
+                $param,
+                $c,
+                $fechaPago,
+                $pdo,
+                $tieneBecaAlumno,
+                $articulosBecaLabelAlumno
+            );
             $abono = cobranza_parse_abono_post($rawAbonoCuota, (int) $c['id'], (float) $calcBase['total_linea']);
             $calc = cobranza_aplicar_abono_linea($calcBase, $abono);
             if (!empty($calc['es_parcial'])) {
@@ -959,7 +966,14 @@ if ($alumnoId > 0) {
                     foreach ($cuotasSel as $c) {
                         $lineasCalc[] = [
                             'cuota' => $c,
-                            'calc' => cobranza_calcular_linea_cuota($param, $c, $fechaPago),
+                            'calc' => cobranza_calcular_linea_cuota(
+                                $param,
+                                $c,
+                                $fechaPago,
+                                $pdo,
+                                $tieneBecaAlumno,
+                                $articulosBecaLabelAlumno
+                            ),
                         ];
                     }
                     if ($calcError === null && count($ajusteSelGet) > 0) {
@@ -1141,7 +1155,14 @@ if ($alumnoId > 0 && !$alumno) {
                     $fechaTxt = $ts !== false ? date('d/m/Y', $ts) : (string) $c['fecha_mov'];
                 }
                 $saldoImp = cobranza_saldo_impago_cuota($c);
-                $prevCuota = cobranza_calcular_linea_cuota($param, $c, $fechaPago);
+                $prevCuota = cobranza_calcular_linea_cuota(
+                    $param,
+                    $c,
+                    $fechaPago,
+                    $pdo,
+                    $tieneBecaAlumno,
+                    $articulosBecaLabelAlumno
+                );
                 $notasCuota = cobranza_badge_abono_parcial_html($c);
                 $estVis = cobranza_estado_visual_cobro_html($c);
                 if ($estVis !== '' && $estVis !== '—') {
