@@ -677,6 +677,10 @@ function cobranza_enriquecer_cuota_beca_para_liquidar(
     if ($esPostitulo) {
         $cuota['tiene_beca'] = 0;
         $cuota['articulos_beca_detalle'] = null;
+        // Evitar freeze/backfill agresivo (abono_ref > original) que reactivaría beca después.
+        if ($abonoRef > $orig + 0.005) {
+            $cuota['importe_abono_referencia'] = $orig;
+        }
 
         return $cuota;
     }
@@ -968,9 +972,10 @@ function cobranza_listar_cuotas_impagas(PDO $pdo, ?int $alumnoId = null): array
                COALESCE(pa.descuento_acum, 0) AS descuento_acum,
                COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
                ' . $expr . ' AS saldo_impago
+               ' . postitulo_sql_select_cols($pdo, 'cm') . '
         FROM cuota_mensual cm
         ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
-        ' . cobranza_sql_join_legacy_haber_por_periodo() . "
+        ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . "
         WHERE cm.estado <> 'anulada'
           " . operativo_sql_filtro_cuota($pdo, 'cm') . "
           AND {$expr} > 0.005
@@ -1371,15 +1376,22 @@ function cobranza_calcular_linea_cuota(
     $saldo = cobranza_saldo_impago_cuota($cuota);
     $orig = round((float) ($cuota['importe_original'] ?? 0), 2);
     $abonoRef = round((float) ($cuota['importe_abono_referencia'] ?? 0), 2);
-    // Beca de ESE período: se congeló abono base > importe generado (becado).
-    $tieneBeca = $abonoRef > $orig + 0.005
-        || (int) ($cuota['tiene_beca'] ?? 0) === 1;
+    $esPostitulo = (int) ($cuota['es_postitulo'] ?? 0) === 1;
+    if (!$esPostitulo && $pdo instanceof PDO) {
+        $esPostitulo = postitulo_alumno_es($pdo, (int) ($cuota['alumno_id'] ?? 0));
+    }
+    // Beca de ESE período: freeze real, nunca en postítulo.
+    $tieneBeca = !$esPostitulo
+        && ($abonoRef > $orig + 0.005 || (int) ($cuota['tiene_beca'] ?? 0) === 1);
     $difBeca = max(0.0, (float) ($cuota['importe_diferencia_beca'] ?? 0));
-    if ($difBeca <= 0.00001 && $abonoRef > 0.00001) {
+    if ($tieneBeca && $difBeca <= 0.00001 && $abonoRef > 0.00001) {
         $difBeca = max(0.0, round($abonoRef - $saldo, 2));
     }
-    $artBeca = trim((string) ($cuota['articulos_beca_detalle'] ?? ''));
-    $esPostitulo = (int) ($cuota['es_postitulo'] ?? 0) === 1;
+    if (!$tieneBeca) {
+        $difBeca = 0.0;
+        $abonoRef = 0.0;
+    }
+    $artBeca = $tieneBeca ? trim((string) ($cuota['articulos_beca_detalle'] ?? '')) : '';
     $vencPostitulo = isset($cuota['fecha_vencimiento_postitulo']) && $cuota['fecha_vencimiento_postitulo'] !== null
         ? (string) $cuota['fecha_vencimiento_postitulo']
         : null;
