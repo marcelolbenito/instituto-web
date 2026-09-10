@@ -652,10 +652,10 @@ function cobranza_importe_coincide_articulo_beca(PDO $pdo, float $importe): bool
 
 /**
  * Completa beca para liquidar:
- * - Si hay freeze (abono_ref > original): usarlo (base histórica de ese mes).
- * - Si la cuota es becada (importe = precio BECA) y no hay freeze: base = cuota lista actual
- *   (ej. setiembre beca fuera de término → 101.000).
- * - Cuotas comunes históricas (ej. julio 96.000): no tocar; liquidar/mora sobre CC.
+ * - Postítulo: nunca (sus importes pueden coincidir con precios BECA, p. ej. 76.000).
+ * - Freeze (abono_ref > original): usarlo.
+ * - Cuota con importe de artículo BECA y alumno con BECA asignada: base = lista actual.
+ * - Cuotas comunes históricas: liquidar/mora sobre CC.
  *
  * @param array<string,mixed> $cuota
  * @return array<string,mixed>
@@ -669,6 +669,17 @@ function cobranza_enriquecer_cuota_beca_para_liquidar(
     $orig = round((float) ($cuota['importe_original'] ?? 0), 2);
     $abonoRef = round((float) ($cuota['importe_abono_referencia'] ?? 0), 2);
     $lista = cobranza_abono_completo_referencia_lista($pdo);
+    $alumnoId = (int) ($cuota['alumno_id'] ?? 0);
+
+    $esPostitulo = array_key_exists('es_postitulo', $cuota)
+        ? ((int) $cuota['es_postitulo'] === 1)
+        : ($alumnoId > 0 && postitulo_alumno_es($pdo, $alumnoId));
+    if ($esPostitulo) {
+        $cuota['tiene_beca'] = 0;
+        $cuota['articulos_beca_detalle'] = null;
+
+        return $cuota;
+    }
 
     // Freeze real al generar (base de ese momento > importe becado).
     if ($abonoRef > $orig + 0.005) {
@@ -680,10 +691,14 @@ function cobranza_enriquecer_cuota_beca_para_liquidar(
         return $cuota;
     }
 
-    // Cuota generada con importe de artículo BECA (sin freeze): al perder beca usar lista actual.
-    $cuotaEsBeca = cobranza_importe_coincide_articulo_beca($pdo, $orig);
+    if ($alumnoTieneBeca === null) {
+        $alumnoTieneBeca = $alumnoId > 0 && cobranza_alumno_tiene_beca($pdo, $alumnoId);
+    }
+
+    // Solo si el importe es de un artículo BECA y el alumno tiene BECA asignada.
+    // Evita: postítulo/histórico 76.000 (POST.LECT) tratado como BECA 25% → 101.000.
+    $cuotaEsBeca = $alumnoTieneBeca && cobranza_importe_coincide_articulo_beca($pdo, $orig);
     if (!$cuotaEsBeca) {
-        // Mes común en CC (p. ej. 91k/96k): no inventar beca por el artículo actual del alumno.
         $cuota['tiene_beca'] = 0;
         $cuota['articulos_beca_detalle'] = null;
 
@@ -704,7 +719,6 @@ function cobranza_enriquecer_cuota_beca_para_liquidar(
     if ($labelBeca !== '') {
         $cuota['articulos_beca_detalle'] = $labelBeca;
     } elseif (trim((string) ($cuota['articulos_beca_detalle'] ?? '')) === '') {
-        $alumnoId = (int) ($cuota['alumno_id'] ?? 0);
         if ($alumnoId > 0) {
             $cuota['articulos_beca_detalle'] = cobranza_alumno_articulos_beca_label($pdo, $alumnoId);
         }
