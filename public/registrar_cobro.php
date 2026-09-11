@@ -437,9 +437,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ajusteIds = array_values(array_unique(array_filter(array_map('intval', $ajusteIds), static fn (int $v): bool => $v > 0)));
     $ajustesCobro = [];
     if (count($ajusteIds) > 0) {
+        $pendIds = array_map(
+            static fn (array $a): int => (int) $a['id'],
+            cobranza_ajustes_debe_pendientes($pdo, $alumnoId)
+        );
+        $ajusteIds = array_values(array_intersect($ajusteIds, $pendIds));
+        if (count($ajusteIds) === 0) {
+            header('Location: registrar_cobro.php?alumno_id=' . $alumnoId . '&fecha_pago=' . rawurlencode($fechaPago) . '&err=' . rawurlencode('Algún concepto con saldo ya no está disponible para cobrar.'));
+            exit;
+        }
         $ph = implode(',', array_fill(0, count($ajusteIds), '?'));
         $stAdj = $pdo->prepare(
-            "SELECT id, concepto, debe, fecha_mov
+            "SELECT id, concepto, debe, fecha_mov, referencia
              FROM cc_ajuste_debe
              WHERE alumno_id = ? AND pago_id IS NULL AND id IN ($ph)"
         );

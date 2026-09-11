@@ -228,7 +228,8 @@ function cobranza_ultimo_periodo_pagado(PDO $pdo, int $alumnoId): ?string
  * @return list<array<string,mixed>>
  */
 /**
- * Ajustes de debe cargados a mano (sin cobro asociado aún).
+ * Ajustes de debe pendientes de cobro (sin pago_id).
+ * Respeta el período operativo (misma idea que las cuotas en registrar cobro / CC).
  *
  * @return list<array<string,mixed>>
  */
@@ -237,15 +238,26 @@ function cobranza_ajustes_debe_pendientes(PDO $pdo, int $alumnoId): array
     if ($alumnoId <= 0 || !db_has_column($pdo, 'cc_ajuste_debe', 'debe')) {
         return [];
     }
-    $st = $pdo->prepare(
-        "SELECT id, fecha_mov, concepto, debe, referencia, creado_en
+
+    $sql = "SELECT id, fecha_mov, concepto, debe, referencia, creado_en
          FROM cc_ajuste_debe
          WHERE alumno_id = ?
            AND pago_id IS NULL
-           AND COALESCE(debe, 0) > 0.005
-         ORDER BY fecha_mov DESC, id DESC"
-    );
-    $st->execute([$alumnoId]);
+           AND COALESCE(debe, 0) > 0.005";
+    $params = [$alumnoId];
+
+    $desde = saldo_corte_desde($pdo);
+    if ($desde === null) {
+        $desde = sprintf('%04d-01-01', cobranza_anio_operativo_desde($pdo));
+    }
+    if ($desde !== null && $desde !== '') {
+        $sql .= ' AND fecha_mov >= ?';
+        $params[] = $desde;
+    }
+
+    $sql .= ' ORDER BY fecha_mov DESC, id DESC';
+    $st = $pdo->prepare($sql);
+    $st->execute($params);
 
     return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
 }
