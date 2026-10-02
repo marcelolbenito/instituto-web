@@ -135,7 +135,7 @@ function recibo_render_html(
     echo '<section id="recibo" class="card cobro-card recibo-simple recibo-impresion">';
     echo '<header class="recibo-encabezado-impresion">';
     instituto_logo_render_html($pdo, 'instituto-logo-print instituto-logo-recibo');
-    echo '<p class="recibo-titulo-principal">RECIBO PROVISORIO</p>';
+    echo '<p class="recibo-titulo-principal">RECIBO <span class="recibo-titulo-provisorio">PROVISORIO</span></p>';
     echo '<p class="recibo-numero">Nº ' . (int) $pago['id'] . '</p>';
     echo '</header>';
     if (pago_anulacion_schema_ok($pdo) && pago_esta_anulado($pago)) {

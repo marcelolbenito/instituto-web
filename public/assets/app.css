@@ -1142,6 +1142,9 @@ button.link {
   body:has(#recibo) #recibo .recibo-subtitle {
     color: #000;
   }
+  body:has(#recibo) #recibo .recibo-titulo-provisorio {
+    display: none !important;
+  }
   body:has(#recibo) #recibo .muted {
     color: #333;
   }
