@@ -383,7 +383,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
                 ' . cobranza_sql_select_beca_cuota_historica($pdo) . postitulo_sql_select_cols($pdo, 'cm') . '
          FROM cuota_mensual cm
-         ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
+         ' . cobranza_sql_join_pago_aplica_cuota_agregado($pdo) . '
          ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
          WHERE cm.alumno_id = ? AND cm.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')
            AND cm.estado <> \'anulada\'
@@ -888,7 +888,7 @@ if ($alumnoId > 0) {
                     ELSE COALESCE(cm.saldo, 0) + COALESCE(pa.aplicado, 0)
                 END AS debe_cc
              FROM cuota_mensual cm
-             ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
+             ' . cobranza_sql_join_pago_aplica_cuota_agregado($pdo) . '
              ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
              WHERE cm.alumno_id = ?
                AND cm.estado <> \'anulada\'
@@ -919,7 +919,7 @@ if ($alumnoId > 0) {
                     ELSE COALESCE(cm.saldo, 0) + COALESCE(pa.aplicado, 0)
                 END AS debe_cc
              FROM cuota_mensual cm
-             ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
+             ' . cobranza_sql_join_pago_aplica_cuota_agregado($pdo) . '
              ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
              WHERE cm.alumno_id = ?
                AND cm.estado <> \'anulada\'
@@ -949,7 +949,7 @@ if ($alumnoId > 0) {
                         'SELECT cm.*, COALESCE(pa.aplicado, 0) AS aplicado_acum, COALESCE(pa.descuento_acum, 0) AS descuento_acum, COALESCE(pl.haber_legacy, 0) AS haber_legacy_acum,
                             ' . cobranza_sql_select_beca_cuota_historica($pdo) . postitulo_sql_select_cols($pdo, 'cm') . '
                      FROM cuota_mensual cm
-                     ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
+                     ' . cobranza_sql_join_pago_aplica_cuota_agregado($pdo) . '
                      ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . '
                      WHERE cm.alumno_id = ? AND cm.id IN (' . $placeholders . ')
                        AND cm.estado <> \'anulada\'

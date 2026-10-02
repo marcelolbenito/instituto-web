@@ -117,15 +117,23 @@ function cobranza_max_descuento_efectivo_pct(): float
 
 /**
  * JOIN agregado pago_aplica_cuota (capital + descuentos pronto pago). Requiere alias cm.
+ * Ignora aplicaciones de recibos anulados (para que al anular reaparezcan en cobro).
  */
-function cobranza_sql_join_pago_aplica_cuota_agregado(): string
+function cobranza_sql_join_pago_aplica_cuota_agregado(?PDO $pdo = null): string
 {
+    $filtroAnul = '';
+    if ($pdo instanceof PDO && db_has_column($pdo, 'pago_registrado', 'anulado_en')) {
+        $filtroAnul = ' AND pr.anulado_en IS NULL';
+    }
+
     return ' LEFT JOIN (
-        SELECT cuota_id,
-               SUM(importe_aplicado) AS aplicado,
-               SUM(COALESCE(importe_descuento, 0)) AS descuento_acum
-        FROM pago_aplica_cuota
-        GROUP BY cuota_id
+        SELECT pac.cuota_id,
+               SUM(pac.importe_aplicado) AS aplicado,
+               SUM(COALESCE(pac.importe_descuento, 0)) AS descuento_acum
+        FROM pago_aplica_cuota pac
+        INNER JOIN pago_registrado pr ON pr.id = pac.pago_id
+        WHERE 1 = 1' . $filtroAnul . '
+        GROUP BY pac.cuota_id
     ) pa ON pa.cuota_id = cm.id';
 }
 
@@ -203,7 +211,7 @@ function cobranza_ultimo_periodo_pagado(PDO $pdo, int $alumnoId): ?string
     $sql = '
         SELECT cm.anio, cm.mes
         FROM cuota_mensual cm
-        ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
+        ' . cobranza_sql_join_pago_aplica_cuota_agregado($pdo) . '
         ' . cobranza_sql_join_legacy_haber_por_periodo() . "
         WHERE cm.alumno_id = ?
           AND cm.estado <> 'anulada'
@@ -948,7 +956,7 @@ function cobranza_alumno_ids_con_cuotas_vencidas(PDO $pdo, ?DateTimeImmutable $f
                ' . $expr . ' AS saldo_impago' . postitulo_sql_select_cols($pdo, 'cm') . '
         FROM cuota_mensual cm
         INNER JOIN alumnos al ON al.id = cm.alumno_id
-        ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
+        ' . cobranza_sql_join_pago_aplica_cuota_agregado($pdo) . '
         ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . "
         WHERE cm.estado <> 'anulada'
           " . operativo_sql_filtro_cuota($pdo, 'cm') . "
@@ -986,7 +994,7 @@ function cobranza_listar_cuotas_impagas(PDO $pdo, ?int $alumnoId = null): array
                ' . $expr . ' AS saldo_impago
                ' . postitulo_sql_select_cols($pdo, 'cm') . '
         FROM cuota_mensual cm
-        ' . cobranza_sql_join_pago_aplica_cuota_agregado() . '
+        ' . cobranza_sql_join_pago_aplica_cuota_agregado($pdo) . '
         ' . cobranza_sql_join_legacy_haber_por_periodo() . postitulo_sql_join($pdo, 'cm') . "
         WHERE cm.estado <> 'anulada'
           " . operativo_sql_filtro_cuota($pdo, 'cm') . "
